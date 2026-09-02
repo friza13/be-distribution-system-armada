@@ -138,6 +138,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async set(key: string, value: string, ttlSeconds: number = 86400): Promise<void> {
+    if (!this.client || !this.isConnected) {
+      return;
+    }
+    try {
+      await this.client.set(key, value, 'EX', ttlSeconds);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to set Redis key ${key}: ${message}`);
+    }
+  }
+
   async isRevoked(key: string): Promise<boolean> {
     if (!this.client || !this.isConnected) {
       return false;

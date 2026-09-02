@@ -5,10 +5,15 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { RedisService } from '../../../common/redis/redis.service';
 import { LocationValidationService } from './location-validation.service';
+import { TrackingCacheService } from './tracking-cache.service';
+import { RealtimeGateway } from '../../realtime/gateways/realtime.gateway';
+import { formatRealtimeEvent } from '../../realtime/dto/realtime-envelope.dto';
 import { LocationIngestionDto } from '../dto/location-ingestion.dto';
 import { LocationBatchIngestionDto } from '../dto/location-batch-ingestion.dto';
 import { Prisma } from '@prisma/client';
@@ -40,6 +45,9 @@ export class TrackingService {
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
     private readonly locationValidationService: LocationValidationService,
+    private readonly trackingCacheService: TrackingCacheService,
+    @Inject(forwardRef(() => RealtimeGateway))
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   /**
@@ -211,6 +219,58 @@ export class TrackingService {
             this.logger.debug(`Idempotency race collision caught for key ${dto.idempotencyKey}`);
           }
         }
+      }
+    }
+
+    // 8. Update Redis Latest Location Cache (With Out-of-Order protection)
+    await this.trackingCacheService.setLatestLocation(driverId, {
+      driverId,
+      deliveryId: dto.deliveryId || null,
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      accuracyM: dto.accuracyM,
+      speedMps: dto.speedMps || null,
+      headingDeg: dto.headingDeg || null,
+      recordedAt: dto.recordedAt,
+      receivedAt: receivedAt.toISOString(),
+    });
+
+    // 9. Realtime Broadcast (ONLY for VALID points, NOT for ANOMALY_VELOCITY)
+    if (valResult.status === 'VALID' && this.realtimeGateway && this.realtimeGateway.server) {
+      const user = await this.prisma.driver.findUnique({
+        where: { id: driverId },
+        select: { userId: true, user: { select: { role: { select: { code: true } } } } },
+      });
+
+      const envelope = formatRealtimeEvent(
+        'driver.location.updated',
+        {
+          driverId,
+          deliveryId: dto.deliveryId || null,
+          latitude: dto.latitude,
+          longitude: dto.longitude,
+          accuracyM: dto.accuracyM,
+          speedMps: dto.speedMps || null,
+          headingDeg: dto.headingDeg || null,
+          recordedAt: dto.recordedAt,
+          receivedAt: receivedAt.toISOString(),
+        },
+        {
+          userId: user?.userId || 'unknown',
+          role: user?.user?.role?.code || 'DRIVER',
+          deviceId: undefined,
+          driverId,
+        },
+      );
+
+      // Broadcast to room 'fleet:monitoring'
+      this.realtimeGateway.server.to('fleet:monitoring').emit('driver.location.updated', envelope);
+
+      // Broadcast to room 'delivery:<id>' if assigned to active delivery
+      if (dto.deliveryId) {
+        this.realtimeGateway.server
+          .to(`delivery:${dto.deliveryId}`)
+          .emit('driver.location.updated', envelope);
       }
     }
 

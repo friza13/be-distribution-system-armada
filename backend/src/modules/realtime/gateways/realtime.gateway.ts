@@ -8,15 +8,17 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { WsJwtAuthGuard, AuthenticatedSocketData } from '../guards/ws-jwt-auth.guard';
 import { WsConnectionManagerService } from '../services/ws-connection-manager.service';
 import { WsRoomAuthorizerService } from '../services/ws-room-authorizer.service';
 import { RedisService } from '../../../common/redis/redis.service';
+import { TrackingService } from '../../tracking/services/tracking.service';
 import { formatRealtimeEvent } from '../dto/realtime-envelope.dto';
 import { JoinRoomDto, LeaveRoomDto } from '../dto/join-room.dto';
+import { LocationIngestionDto } from '../../tracking/dto/location-ingestion.dto';
 
 export interface RevocationEventPayload {
   type: 'USER_REVOKED' | 'DEVICE_REVOKED' | 'SESSION_REVOKED';
@@ -57,6 +59,8 @@ export class RealtimeGateway
     private readonly roomAuthorizer: WsRoomAuthorizerService,
     private readonly redis: RedisService,
     private readonly configService: ConfigService,
+    @Inject(forwardRef(() => TrackingService))
+    private readonly trackingService: TrackingService,
   ) {
     this.heartbeatIntervalMs = this.configService.get<number>(
       'realtime.heartbeatIntervalMs',
@@ -381,5 +385,55 @@ export class RealtimeGateway
     );
 
     client.emit('room_left', roomLeftEvent);
+  }
+
+  @SubscribeMessage('driver.location.update')
+  async handleDriverLocationUpdate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: LocationIngestionDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) {
+      client.emit('location_error', {
+        code: 'UNAUTHENTICATED',
+        message: 'Authentication context required',
+      });
+      return;
+    }
+
+    if (data.role !== 'DRIVER' || !data.driverId) {
+      client.emit('location_error', {
+        code: 'FORBIDDEN',
+        message: 'Only drivers are authorized to submit location telemetry',
+      });
+      return;
+    }
+
+    try {
+      const result = await this.trackingService.processTelemetry(
+        dto,
+        data.driverId,
+        data.role,
+        new Date(),
+        '/v1/realtime',
+      );
+
+      client.emit('location_accepted', {
+        success: true,
+        data: result,
+      });
+    } catch (err: unknown) {
+      let code = 'GPS_VALIDATION_FAILED';
+      let message = 'Telemetry rejected';
+      if (err && typeof err === 'object' && 'getResponse' in err) {
+        const resp = (err as any).getResponse();
+        code = resp?.code || code;
+        message = resp?.message || message;
+      }
+      client.emit('location_error', {
+        code,
+        message,
+      });
+    }
   }
 }
