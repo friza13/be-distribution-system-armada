@@ -12,6 +12,7 @@ import { UsersModule } from './modules/users/users.module';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { E2eeKeysModule } from './modules/e2ee-keys/e2ee-keys.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
+import { TrackingModule } from './modules/tracking/tracking.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -34,6 +35,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     DeliveriesModule,
     E2eeKeysModule,
     RealtimeModule,
+    TrackingModule,
     HealthModule,
   ],
 })
