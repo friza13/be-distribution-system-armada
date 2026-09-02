@@ -1,0 +1,22 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+
+# Environment and Secrets (CRITICAL)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
