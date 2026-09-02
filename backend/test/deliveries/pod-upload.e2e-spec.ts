@@ -266,6 +266,50 @@ describe('Secure File Upload & Proof of Delivery (POD) Service (E2E)', () => {
     expect(delivery?.status).toBe('COMPLETED');
   });
 
+  it('should support POD submission directly from ARRIVED state (shortcut transition without explicit UNLOADING)', async () => {
+    // Create new delivery with 1 stop
+    const delRes = await request(app.getHttpServer())
+      .post('/v1/deliveries')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        deliveryCode: `DEL-POD-SHORTCUT-${Date.now()}`,
+        items: [{ itemCode: 'I-1', itemName: 'Box', quantity: 1, unit: 'BOX' }],
+        stops: [{ sequence: 1, destinationName: 'Stop Monas Shortcut', address: 'Addr Monas', latitude: -6.1754, longitude: 106.8272 }],
+      })
+      .expect(HttpStatus.CREATED);
+
+    const delId = delRes.body.data.id;
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/assign`).set('Authorization', `Bearer ${ownerToken}`).send({ driverId: driverEntityA.id, vehicleId: vehicleEntity.id });
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/accept`).set('Authorization', `Bearer ${driverTokenA}`);
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/start`).set('Authorization', `Bearer ${driverTokenA}`);
+
+    const delWithStops = await prisma.delivery.findUnique({ where: { id: delId }, include: { stops: true } });
+    const sId = delWithStops!.stops[0].id;
+
+    // Arrive at stop (status = ARRIVED)
+    await request(app.getHttpServer()).post(`/v1/me/stops/${sId}/arrive`).set('Authorization', `Bearer ${driverTokenA}`);
+
+    // Submit POD directly from ARRIVED state (bypassing explicit UNLOADING call)
+    const podRes = await request(app.getHttpServer())
+      .post(`/v1/me/stops/${sId}/pod`)
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .send({
+        receiverName: 'Shortcut Receiver',
+        photoFileId: uploadedFileId,
+      })
+      .expect(HttpStatus.CREATED);
+
+    expect(podRes.body.success).toBe(true);
+    expect(podRes.body.data.status).toBe('DELIVERED');
+
+    // Cleanup
+    await prisma.proofOfDelivery.deleteMany({ where: { deliveryStopId: sId } });
+    await prisma.deliveryEvent.deleteMany({ where: { deliveryId: delId } });
+    await prisma.deliveryStop.deleteMany({ where: { deliveryId: delId } });
+    await prisma.deliveryItem.deleteMany({ where: { deliveryId: delId } });
+    await prisma.delivery.delete({ where: { id: delId } });
+  });
+
   it('should allow Owner to download the POD photo file (GET /v1/files/:id/download)', async () => {
     const res = await request(app.getHttpServer())
       .get(`/v1/files/${uploadedFileId}/download`)

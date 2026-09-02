@@ -264,4 +264,40 @@ describe('Delivery Management & State Machine Engine (E2E)', () => {
 
     expect(res.body.error.code).toBe('INVALID_STATE_TRANSITION');
   });
+
+  it('should auto-transition delivery status to FAILED when all stops fail with zero DELIVERED stops', async () => {
+    // Create new delivery
+    const delRes = await request(app.getHttpServer())
+      .post('/v1/deliveries')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        deliveryCode: `DEL-FAIL-ALL-${Date.now()}`,
+        items: [{ itemCode: 'I-1', itemName: 'Box', quantity: 1, unit: 'BOX' }],
+        stops: [{ sequence: 1, destinationName: 'Stop 1', address: 'Addr 1', latitude: -6.1754, longitude: 106.8272 }],
+      })
+      .expect(HttpStatus.CREATED);
+
+    const delId = delRes.body.data.id;
+
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/assign`).set('Authorization', `Bearer ${ownerToken}`).send({ driverId: driverEntityA.id, vehicleId: vehicleEntity.id });
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/accept`).set('Authorization', `Bearer ${driverTokenA}`);
+    await request(app.getHttpServer()).post(`/v1/deliveries/${delId}/start`).set('Authorization', `Bearer ${driverTokenA}`);
+
+    const delWithStops = await prisma.delivery.findUnique({ where: { id: delId }, include: { stops: true } });
+    const stopId = delWithStops!.stops[0].id;
+
+    // Fail the only stop
+    await request(app.getHttpServer()).post(`/v1/me/stops/${stopId}/arrive`).set('Authorization', `Bearer ${driverTokenA}`);
+    await request(app.getHttpServer()).post(`/v1/me/stops/${stopId}/fail`).set('Authorization', `Bearer ${driverTokenA}`).send({ reason: 'All attempts failed' });
+
+    // Verify delivery status automatically transitioned to FAILED
+    const updatedDel = await prisma.delivery.findUnique({ where: { id: delId } });
+    expect(updatedDel?.status).toBe('FAILED');
+
+    // Cleanup
+    await prisma.deliveryEvent.deleteMany({ where: { deliveryId: delId } });
+    await prisma.deliveryStop.deleteMany({ where: { deliveryId: delId } });
+    await prisma.deliveryItem.deleteMany({ where: { deliveryId: delId } });
+    await prisma.delivery.delete({ where: { id: delId } });
+  });
 });

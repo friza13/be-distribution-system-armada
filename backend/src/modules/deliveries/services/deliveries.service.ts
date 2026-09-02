@@ -302,10 +302,12 @@ export class DeliveriesService {
       });
     }
 
+    const finalStatus = isEligible.targetStatus || 'COMPLETED';
+
     const updated = await this.prisma.delivery.update({
       where: { id: deliveryId },
       data: {
-        status: 'COMPLETED',
+        status: finalStatus,
         completedAt: new Date(),
       },
     });
@@ -313,14 +315,14 @@ export class DeliveriesService {
     await this.prisma.auditLog.create({
       data: {
         actorUserId: actor.userId,
-        action: 'DELIVERY_COMPLETED',
+        action: finalStatus === 'COMPLETED' ? 'DELIVERY_COMPLETED' : 'DELIVERY_FAILED',
         entityType: 'DELIVERY',
         entityId: deliveryId,
         result: 'SUCCESS',
       },
     });
 
-    this.broadcastStatusChanged(deliveryId, 'COMPLETED', actor);
+    this.broadcastStatusChanged(deliveryId, finalStatus, actor);
 
     return updated;
   }
@@ -358,9 +360,11 @@ export class DeliveriesService {
 
   /**
    * Single Source of Truth completion evaluator.
-   * Checks if ALL stops are terminal (DELIVERED, FAILED, SKIPPED) and >= 1 is DELIVERED.
+   * Checks if ALL stops are terminal (DELIVERED, FAILED, SKIPPED).
+   * - If at least 1 stop is DELIVERED -> targetStatus: COMPLETED.
+   * - If 0 stops are DELIVERED (all FAILED/SKIPPED) -> targetStatus: FAILED.
    */
-  async evaluateDeliveryCompletion(deliveryId: string, tx?: any): Promise<{ completed: boolean; unfinishedStops?: any[] }> {
+  async evaluateDeliveryCompletion(deliveryId: string, tx?: any): Promise<{ completed: boolean; targetStatus?: 'COMPLETED' | 'FAILED'; unfinishedStops?: any[] }> {
     const client = tx || this.prisma;
     const stops = await client.deliveryStop.findMany({
       where: { deliveryId },
@@ -378,27 +382,25 @@ export class DeliveriesService {
     }
 
     const hasDeliveredStop = stops.some((s: any) => s.status === 'DELIVERED');
-    if (!hasDeliveredStop) {
-      return { completed: false };
-    }
+    const targetStatus = hasDeliveredStop ? 'COMPLETED' : 'FAILED';
 
-    return { completed: true };
+    return { completed: true, targetStatus };
   }
 
   /**
-   * Helper method to automatically mark delivery as COMPLETED if eligible.
+   * Helper method to automatically mark delivery as COMPLETED or FAILED if eligible.
    */
   async completeDeliveryIfEligible(deliveryId: string, actor: DeliveryActor) {
     try {
       const evaluation = await this.evaluateDeliveryCompletion(deliveryId);
-      if (evaluation.completed) {
+      if (evaluation.completed && evaluation.targetStatus) {
         const delivery = await this.prisma.delivery.findUnique({ where: { id: deliveryId } });
         if (delivery && delivery.status === 'EN_ROUTE') {
           await this.prisma.delivery.update({
             where: { id: deliveryId },
-            data: { status: 'COMPLETED', completedAt: new Date() },
+            data: { status: evaluation.targetStatus, completedAt: new Date() },
           });
-          this.broadcastStatusChanged(deliveryId, 'COMPLETED', actor);
+          this.broadcastStatusChanged(deliveryId, evaluation.targetStatus, actor);
         }
       }
     } catch (err: unknown) {
