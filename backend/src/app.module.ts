@@ -14,6 +14,7 @@ import { E2eeKeysModule } from './modules/e2ee-keys/e2ee-keys.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { TrackingModule } from './modules/tracking/tracking.module';
 import { FleetModule } from './modules/fleet/fleet.module';
+import { RoutesModule } from './modules/routes/routes.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -38,6 +39,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     RealtimeModule,
     TrackingModule,
     FleetModule,
+    RoutesModule,
     HealthModule,
   ],
 })
