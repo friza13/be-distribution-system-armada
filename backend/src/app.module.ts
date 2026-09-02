@@ -10,6 +10,7 @@ import { SessionModule } from './modules/sessions/session.module';
 import { DeviceModule } from './modules/devices/device.module';
 import { UsersModule } from './modules/users/users.module';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module';
+import { E2eeKeysModule } from './modules/e2ee-keys/e2ee-keys.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -30,6 +31,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     DeviceModule,
     UsersModule,
     DeliveriesModule,
+    E2eeKeysModule,
     HealthModule,
   ],
 })
