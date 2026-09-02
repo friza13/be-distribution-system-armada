@@ -76,8 +76,8 @@ describe('Fleet Live Monitoring & Driver Location History APIs (E2E)', () => {
     // 1. Owner & Admin Setup
     ownerUser = await prisma.user.create({
       data: {
-        username: `fl_own_${Date.now()}`,
-        phone: `+62818${Date.now().toString().slice(-8)}`,
+        username: `fl_own_${Date.now()}_${Math.random()}`,
+        phone: `+62888${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
         status: 'ACTIVE',
@@ -89,8 +89,8 @@ describe('Fleet Live Monitoring & Driver Location History APIs (E2E)', () => {
 
     adminUser = await prisma.user.create({
       data: {
-        username: `fl_adm_${Date.now()}`,
-        phone: `+62819${Date.now().toString().slice(-8)}`,
+        username: `fl_adm_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        phone: `+62889${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: adminRole.id,
         status: 'ACTIVE',
@@ -103,15 +103,15 @@ describe('Fleet Live Monitoring & Driver Location History APIs (E2E)', () => {
     // 2. Driver A Setup
     driverUserA = await prisma.user.create({
       data: {
-        username: `fl_drv_a_${Date.now()}`,
-        phone: `+62821${Date.now().toString().slice(-8)}`,
+        username: `fl_drv_a_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        phone: `+62887${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
       },
     });
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `EMP-FL-A-${Date.now()}`, displayName: 'Fleet Driver A', phone: driverUserA.phone, operationalStatus: 'AVAILABLE' },
+      data: { userId: driverUserA.id, employeeCode: `EMP-FL-A-${Date.now()}-${Math.floor(Math.random() * 1000)}`, displayName: 'Fleet Driver A', phone: driverUserA.phone, operationalStatus: 'AVAILABLE' },
     });
     driverDeviceA = await prisma.device.create({ data: { userId: driverUserA.id, deviceIdentifier: `da-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' } });
     driverSessionA = await prisma.session.create({ data: { userId: driverUserA.id, deviceId: driverDeviceA.id, refreshTokenHash: 'h_da', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) } });
@@ -120,8 +120,8 @@ describe('Fleet Live Monitoring & Driver Location History APIs (E2E)', () => {
     // 3. Driver B Setup
     driverUserB = await prisma.user.create({
       data: {
-        username: `fl_drv_b_${Date.now()}`,
-        phone: `+62822${Date.now().toString().slice(-8)}`,
+        username: `fl_drv_b_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        phone: `+62886${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 1000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',

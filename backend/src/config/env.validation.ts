@@ -16,4 +16,9 @@ export const envValidationSchema = Joi.object({
   JWT_ACCESS_EXPIRATION: Joi.string().default('15m'),
   JWT_REFRESH_EXPIRATION: Joi.string().default('7d'),
   CORS_ALLOWED_ORIGINS: Joi.string().default('http://localhost:3000,http://localhost:5173'),
+  WS_HEARTBEAT_INTERVAL_MS: Joi.number().default(25000),
+  WS_PONG_TIMEOUT_MS: Joi.number().default(10000),
+  BACKUP_ENCRYPTION_KEY: Joi.string().min(32).optional(),
+  TURN_SECRET: Joi.string().min(32).optional(),
+  FCM_SERVER_KEY: Joi.string().optional(),
 });

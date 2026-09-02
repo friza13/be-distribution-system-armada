@@ -8,6 +8,24 @@ servers:
     description: Production API v1
 
 paths:
+  /health/liveness:
+    get:
+      summary: Liveness probe check
+      description: Returns process uptime and liveness status.
+      responses:
+        '200':
+          description: Process is live
+
+  /health/readiness:
+    get:
+      summary: Readiness probe check
+      description: Deep check evaluating DB, Redis, and Storage readiness.
+      responses:
+        '200':
+          description: System is healthy and ready to serve traffic
+        '503':
+          description: System component is unhealthy
+
   /me/location:
     post:
       summary: Ingest single GPS telemetry data point
@@ -15,77 +33,36 @@ paths:
         - BearerAuth: []
       responses:
         '201':
-          description: Location ingested successfully
+          description: Location ingested
         '429':
           description: Rate limit exceeded
 
-  /conversations:
+  /devices/register-push-token:
     post:
-      summary: Create 1:1 conversation between Owner/Admin and Driver
+      summary: Register FCM push notification token
       security:
         - BearerAuth: []
       responses:
-        '201':
-          description: Conversation created
+        '200':
+          description: Push token registered
+
+  /notifications:
     get:
-      summary: List user conversations
+      summary: Get user operational notifications
       security:
         - BearerAuth: []
       responses:
         '200':
-          description: Conversations list
+          description: Notifications list
 
-  /conversations/{id}/messages:
-    get:
-      summary: Retrieve E2EE ciphertext message history
+  /notifications/{id}/read:
+    patch:
+      summary: Mark notification as read
       security:
         - BearerAuth: []
       responses:
         '200':
-          description: Ciphertext messages list
-    post:
-      summary: Send E2EE encrypted message
-      security:
-        - BearerAuth: []
-      responses:
-        '201':
-          description: Ciphertext message saved
-
-  /voice-sessions:
-    post:
-      summary: Initiate Voice PTT Session with Ephemeral TURN credentials
-      security:
-        - BearerAuth: []
-      responses:
-        '201':
-          description: Voice session created with TURN credentials
-
-  /video-sessions:
-    post:
-      summary: Initiate Video Call Session
-      security:
-        - BearerAuth: []
-      responses:
-        '201':
-          description: Video session created
-
-  /realtime/sessions/{id}/respond:
-    post:
-      summary: Driver responds to incoming call (ACCEPT or DECLINE)
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: Call response processed
-
-  /realtime/sessions/{id}/end:
-    post:
-      summary: End active call session
-      security:
-        - BearerAuth: []
-      responses:
-        '200':
-          description: Call session ended
+          description: Notification marked read
 
 components:
   securitySchemes:
