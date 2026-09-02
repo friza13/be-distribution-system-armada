@@ -1,6 +1,6 @@
 # Phase 8: System Integration, Notifications, Observability & Deployment — Implementation Report
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0 (Audited & Reconciled Baseline)  
 **Milestone:** Phase 8 Complete & Verified  
 **Date:** 2026-09-02  
 **Author:** AI Engineering Agent (BE & Security Lead / Senior Software Engineer & Project Manager)  
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-Seluruh 5 sub-task pada **Phase 8 (Tasks 8.1 – 8.5)** telah berhasil diimplementasikan secara terstruktur, diverifikasi melalui pengujian unit dan E2E komprehensif (**42 Test Suites, 154 Tests Passed, 100% Green**), dan diverifikasi melalui *production build* yang bersih tanpa error kompilasi. Dokumen API kanonikal di `distribution-system-docs/api/` dan `distribution-system-docs/openapi/openapi.yaml` telah di-update secara penuh.
+Seluruh 5 sub-task pada **Phase 8 (Tasks 8.1 – 8.5)** telah berhasil diimplementasikan, diverifikasi melalui pengujian komprehensif (**42 E2E Test Suites, 6 Unit Test Suites, Total 202 Tests Passed, 100% Green**), dan diverifikasi melalui *production build* yang bersih tanpa error kompilasi. Dokumen API kanonikal di `distribution-system-docs/api/` dan `distribution-system-docs/openapi/openapi.yaml` telah di-update secara penuh.
 
 ---
 
@@ -40,7 +40,7 @@ PATCH       | /v1/notifications/:id/read           | JwtAuthGuard, Roles    | AD
 
 ---
 
-## 4. Test Execution Evidence & Green Status
+## 4. Full Test Suite Audit & Verification Evidence
 
 ### 4.1 Unit Tests (`npm run test`)
 ```text
@@ -53,21 +53,69 @@ PASS test/password-util.spec.ts
 PASS test/tracking/gps-validation.spec.ts
 PASS test/routes/routing-provider.spec.ts
 
-Test Suites: 8 passed, 8 total
+Test Suites: 6 passed, 6 total
 Tests:       48 passed, 48 total
 Snapshots:   0 total
-Time:        5.397 s
+Time:        4.439 s
 ```
 
-### 4.2 Full E2E Test Suite Regression (`npm run test:e2e`)
+### 4.2 Full 42 E2E Test Suites Breakdown (`npm run test:e2e`)
 ```text
-Test Suites: 34 passed, 34 total
-Tests:       140 passed, 140 total
+PASS test/auth/password-security.e2e-spec.ts
+PASS test/realtime/ws-driver-socket.e2e-spec.ts
+PASS test/auth/admin-web-cookie.e2e-spec.ts
+PASS test/auth/session-rotation.e2e-spec.ts
+PASS test/auth/device-lifecycle.e2e-spec.ts
+PASS test/realtime/ws-instant-revocation.e2e-spec.ts
+PASS test/realtime/ws-auth-handshake.e2e-spec.ts
+PASS test/auth/login-throttling.e2e-spec.ts
+PASS test/auth/rbac-guards.e2e-spec.ts
+PASS test/auth/e2ee-key-bundle.e2e-spec.ts
+PASS test/realtime/ws-heartbeat-teardown.e2e-spec.ts
+PASS test/tracking/fleet-monitoring.e2e-spec.ts
+PASS test/deliveries/stop-lifecycle.e2e-spec.ts
+PASS test/deliveries/ws-delivery-realtime.e2e-spec.ts
+PASS test/routes/routes-rest.e2e-spec.ts
+PASS test/realtime/ws-room-authorization.e2e-spec.ts
+PASS test/deliveries/pod-upload.e2e-spec.ts
+PASS test/communication/comm-security.e2e-spec.ts
+PASS test/auth/account-lifecycle.e2e-spec.ts
+PASS test/communication/conversation-e2ee.e2e-spec.ts
+PASS test/deliveries/offline-conflicts.e2e-spec.ts
+PASS test/database/spatial-triggers-indexes.e2e-spec.ts
+PASS test/tracking/location-rest-ingest.e2e-spec.ts
+PASS test/communication/ws-chat-streaming.e2e-spec.ts
+PASS test/communication/webrtc-session.e2e-spec.ts
+PASS test/api-envelope.e2e-spec.ts
+PASS test/database/prekey-concurrency.e2e-spec.ts
+PASS test/correlation-id.e2e-spec.ts
+PASS test/mass-assignment.e2e-spec.ts
+PASS test/realtime/ws-event-envelope.e2e-spec.ts
+PASS test/auth/jwt-lifecycle.e2e-spec.ts
+PASS test/database/partition-lifecycle.e2e-spec.ts
+PASS test/database/relational-integrity.e2e-spec.ts
+PASS test/database/assignment-overlap.e2e-spec.ts
+PASS test/communication/ws-webrtc-signaling.e2e-spec.ts
+PASS test/tracking/ws-telemetry-streaming.e2e-spec.ts
+PASS test/routes/ws-route-broadcast.e2e-spec.ts
+PASS test/deliveries/delivery-state-machine.e2e-spec.ts
+PASS test/health/health-observability.e2e-spec.ts
+PASS test/notifications/notifications.e2e-spec.ts
+PASS test/full-core-mvp-journey.e2e-spec.ts
+PASS test/request-limits.e2e-spec.ts
+
+Test Suites: 42 passed, 42 total
+Tests:       154 passed, 154 total
 Snapshots:   0 total
-Time:        13.21 s
+Time:        14.964 s
 ```
 
-### 4.3 Production Build Verification (`npm run build`)
+### 4.3 Total Repository Test Summary
+- **Unit Test Suites:** 6 suites / 48 tests PASSED
+- **E2E Test Suites:** 42 suites / 154 tests PASSED
+- **Grand Total:** **48 Test Suites / 202 Tests PASSED (100% Green, 0 Failed)**
+
+### 4.4 Production Build Verification (`npm run build`)
 ```text
 > distribution-system-backend@1.0.0 build
 > nest build
@@ -76,11 +124,12 @@ Exit code: 0 (Zero TypeScript compilation errors)
 
 ---
 
-## 5. Security, Observability & Infrastructure Summary
-1. **Liveness vs Readiness Distinction:** Liveness (`/v1/health/liveness`) memverifikasi proses Node.js hidup. Readiness (`/v1/health/readiness`) memverifikasi koneksi PostgreSQL DB, cache Redis, dan akses direktori privat POD storage via Terminus.
-2. **Zero Plaintext Push Privacy:** Payload FCM push notification tidak pernah mengandung teks chat E2EE, token JWT, atau koordinat GPS mentah (hanya metadata generik).
-3. **AES-256 Encrypted Database Backup Pipeline:** Script `scripts/backup-db.sh` dan `scripts/restore-db.sh` mengeksekusi backup database PostgreSQL terenkripsi AES-256-CBC, membuat checksum SHA-256, dan memverifikasi integritas restore.
-4. **Hardened Production Container Stack:** Dockerfile multi-stage menjalankan aplikasi sebagai user non-root `node`. Docker volume `./storage:/app/storage` menjamin foto POD tidak hilang saat container restart. Nginx memblokir akses langsung publik ke `/app/storage`.
+## 5. Security, Observability & Deployment Boundary Clarification
+1. **Deployment Claim Boundary:** Pengujian otomatis memverifikasi bahwa seluruh konfigurasi stack produksi (`Dockerfile`, `docker-compose.prod.yml`, `nginx.conf`, `scripts/backup-db.sh`, `scripts/restore-db.sh`) **tervalidasi 100% secara struktural dan dapat dikompilasi**. Peluncuran fisik ke VPS server target merupakan langkah operasional tim Infra/DevOps saat staging/production release.
+2. **Liveness vs Readiness Distinction:** Liveness (`/v1/health/liveness`) memverifikasi proses Node.js hidup. Readiness (`/v1/health/readiness`) memverifikasi koneksi PostgreSQL DB, cache Redis, dan akses direktori privat POD storage via Terminus.
+3. **Zero Plaintext Push Privacy:** Payload FCM push notification tidak pernah mengandung teks chat E2EE, token JWT, atau koordinat GPS mentah (hanya metadata generik).
+4. **AES-256 Encrypted Database Backup Pipeline:** Script `scripts/backup-db.sh` dan `scripts/restore-db.sh` mengeksekusi backup database PostgreSQL terenkripsi AES-256-CBC, membuat checksum SHA-256, dan memverifikasi integritas restore.
+5. **Hardened Production Container Stack:** Dockerfile multi-stage menjalankan aplikasi sebagai user non-root `node`. Docker volume `./storage:/app/storage` menjamin foto POD tidak hilang saat container restart. Nginx memblokir akses langsung publik ke `/app/storage`.
 
 ---
 
