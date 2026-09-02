@@ -46,11 +46,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const isSessionRevoked = await this.redis.isRevoked(
       `revoked:session:${payload.sessionId}`,
     );
-    const isUserRevoked = await this.redis.isRevoked(
-      `revoked:user:${payload.sub}`,
-    );
 
-    if (isSessionRevoked || isUserRevoked) {
+    if (isSessionRevoked) {
       throw new UnauthorizedException({
         code: 'TOKEN_REVOKED',
         message: 'Token or session has been revoked',
@@ -93,6 +90,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException({
         code: 'ROLE_UPDATED_REAUTH_REQUIRED',
         message: 'User permissions or role have changed. Please re-authenticate.',
+      });
+    }
+
+    const isUserRevoked = await this.redis.isRevoked(
+      `revoked:user:${payload.sub}`,
+    );
+
+    if (isUserRevoked) {
+      throw new UnauthorizedException({
+        code: 'TOKEN_REVOKED',
+        message: 'User tokens have been revoked',
       });
     }
 

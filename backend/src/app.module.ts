@@ -8,6 +8,8 @@ import { RedisModule } from './common/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { SessionModule } from './modules/sessions/session.module';
 import { DeviceModule } from './modules/devices/device.module';
+import { UsersModule } from './modules/users/users.module';
+import { DeliveriesModule } from './modules/deliveries/deliveries.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -26,6 +28,8 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     SessionModule,
     AuthModule,
     DeviceModule,
+    UsersModule,
+    DeliveriesModule,
     HealthModule,
   ],
 })
