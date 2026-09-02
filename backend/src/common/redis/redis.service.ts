@@ -127,6 +127,17 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async get(key: string): Promise<string | null> {
+    if (!this.client || !this.isConnected) {
+      return null;
+    }
+    try {
+      return await this.client.get(key);
+    } catch {
+      return null;
+    }
+  }
+
   async isRevoked(key: string): Promise<boolean> {
     if (!this.client || !this.isConnected) {
       return false;
