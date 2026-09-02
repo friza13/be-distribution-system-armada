@@ -7,6 +7,7 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { RedisModule } from './common/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { SessionModule } from './modules/sessions/session.module';
+import { DeviceModule } from './modules/devices/device.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -24,6 +25,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     RedisModule,
     SessionModule,
     AuthModule,
+    DeviceModule,
     HealthModule,
   ],
 })

@@ -35,6 +35,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       } else if (typeof res === 'object' && res !== null) {
         const resObj = res as Record<string, unknown>;
         errorMessage = (resObj.message as string) || exception.message;
+        if (resObj.code && typeof resObj.code === 'string') {
+          errorCode = resObj.code;
+        }
         if (Array.isArray(resObj.message)) {
           errorMessage = 'Validation failed';
           errorDetails = resObj.message;
@@ -59,6 +62,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       ...(errorDetails ? { details: errorDetails } : {}),
     };
 
-    response.status(status).json(ApiResponse.error(errorPayload, requestId));
+    const envelope = ApiResponse.error(errorPayload, requestId);
+    response.status(status).json(envelope);
   }
 }
