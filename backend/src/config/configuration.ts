@@ -20,4 +20,8 @@ export default () => ({
   cors: {
     allowedOrigins: (process.env.CORS_ALLOWED_ORIGINS || '').split(','),
   },
+  realtime: {
+    heartbeatIntervalMs: parseInt(process.env.WS_HEARTBEAT_INTERVAL_MS || '25000', 10),
+    pongTimeoutMs: parseInt(process.env.WS_PONG_TIMEOUT_MS || '10000', 10),
+  },
 });

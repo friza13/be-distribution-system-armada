@@ -88,6 +88,16 @@ export class WsConnectionManagerService {
 
     const data = socket.data as AuthenticatedSocketData;
     if (data) {
+      // Clear any pending heartbeat timers to prevent memory/timer leaks
+      if (data.heartbeatIntervalTimer) {
+        clearInterval(data.heartbeatIntervalTimer);
+        data.heartbeatIntervalTimer = undefined;
+      }
+      if (data.pongTimeoutTimer) {
+        clearTimeout(data.pongTimeoutTimer);
+        data.pongTimeoutTimer = undefined;
+      }
+
       const { userId, sessionId, deviceId, driverId } = data;
 
       if (userId && this.userSockets.has(userId)) {

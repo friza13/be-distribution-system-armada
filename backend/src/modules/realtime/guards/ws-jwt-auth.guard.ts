@@ -16,6 +16,11 @@ export interface AuthenticatedSocketData {
   driverId: string | null;
   connectedAt: Date;
   joinedRooms: Set<string>;
+  lastPingSentAt?: number;
+  lastPongReceivedAt?: number;
+  rttLatencyMs?: number;
+  heartbeatIntervalTimer?: NodeJS.Timeout;
+  pongTimeoutTimer?: NodeJS.Timeout;
 }
 
 export interface WsJwtPayload {

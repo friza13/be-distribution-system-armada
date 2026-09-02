@@ -4,10 +4,14 @@ import {
   OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
-import { WsJwtAuthGuard } from '../guards/ws-jwt-auth.guard';
+import { WsJwtAuthGuard, AuthenticatedSocketData } from '../guards/ws-jwt-auth.guard';
 import { WsConnectionManagerService } from '../services/ws-connection-manager.service';
 import { RedisService } from '../../../common/redis/redis.service';
 import { formatRealtimeEvent } from '../dto/realtime-envelope.dto';
@@ -21,6 +25,11 @@ export interface RevocationEventPayload {
   timestamp?: string;
 }
 
+export interface ClientPongPayload {
+  clientTime?: number;
+  pingServerTime?: number;
+}
+
 @WebSocketGateway({
   namespace: '/v1/realtime',
   cors: {
@@ -31,9 +40,11 @@ export interface RevocationEventPayload {
   transports: ['websocket', 'polling'],
 })
 export class RealtimeGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(RealtimeGateway.name);
+  private readonly heartbeatIntervalMs: number;
+  private readonly pongTimeoutMs: number;
 
   @WebSocketServer()
   server: Server;
@@ -42,7 +53,17 @@ export class RealtimeGateway
     private readonly wsJwtAuthGuard: WsJwtAuthGuard,
     private readonly connectionManager: WsConnectionManagerService,
     private readonly redis: RedisService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.heartbeatIntervalMs = this.configService.get<number>(
+      'realtime.heartbeatIntervalMs',
+      25000,
+    );
+    this.pongTimeoutMs = this.configService.get<number>(
+      'realtime.pongTimeoutMs',
+      10000,
+    );
+  }
 
   async onModuleInit() {
     // Subscribe to Redis Pub/Sub channel 'security:revocation' for instant socket teardown
@@ -53,6 +74,10 @@ export class RealtimeGateway
       },
     );
     this.logger.log('Subscribed to security:revocation Redis channel');
+  }
+
+  onModuleDestroy() {
+    this.logger.log('Realtime Gateway destroying, cleaning up connections');
   }
 
   private handleRevocationMessage(rawMessage: string): void {
@@ -151,10 +176,118 @@ export class RealtimeGateway
     );
 
     client.emit('connected', connectedEvent);
+
+    // Start server-initiated heartbeat cycle
+    this.startHeartbeatCycle(client);
   }
 
   handleDisconnect(client: Socket) {
+    this.stopHeartbeatTimers(client);
     this.connectionManager.removeSocket(client.id);
     this.logger.log(`WS client disconnected: ${client.id}`);
+  }
+
+  private startHeartbeatCycle(socket: Socket) {
+    const data = socket.data as AuthenticatedSocketData;
+    if (!data) return;
+
+    this.stopHeartbeatTimers(socket);
+
+    // Initial ping upon connection or scheduling
+    data.heartbeatIntervalTimer = setInterval(() => {
+      this.sendHeartbeatPing(socket);
+    }, this.heartbeatIntervalMs);
+  }
+
+  public sendHeartbeatPing(socket: Socket): void {
+    if (!socket.connected) {
+      this.stopHeartbeatTimers(socket);
+      return;
+    }
+
+    const data = socket.data as AuthenticatedSocketData;
+    if (!data) return;
+
+    const pingServerTime = Date.now();
+    data.lastPingSentAt = pingServerTime;
+
+    // Clear any prior pending pong timeout timer before arming a new one
+    if (data.pongTimeoutTimer) {
+      clearTimeout(data.pongTimeoutTimer);
+      data.pongTimeoutTimer = undefined;
+    }
+
+    // Arm pong timeout watchdog: if client fails to respond within pongTimeoutMs -> STALE_HEARTBEAT_TIMEOUT
+    data.pongTimeoutTimer = setTimeout(() => {
+      this.handleStaleSocketTimeout(socket);
+    }, this.pongTimeoutMs);
+
+    // Emit heartbeat ping to client
+    socket.emit('ping', { serverTime: pingServerTime });
+  }
+
+  private handleStaleSocketTimeout(socket: Socket): void {
+    if (!socket.connected) return;
+
+    const data = socket.data as AuthenticatedSocketData;
+    const socketId = socket.id;
+    const userId = data?.userId || 'unknown';
+
+    this.logger.warn(
+      `Heartbeat timeout on socket ${socketId} (userId: ${userId}). Tearing down stale socket.`,
+    );
+
+    // Emit disconnect notice with canonical reason STALE_HEARTBEAT_TIMEOUT
+    socket.emit('disconnect_notice', {
+      event: 'disconnect_notice',
+      reason: 'STALE_HEARTBEAT_TIMEOUT',
+      timestamp: new Date().toISOString(),
+    });
+
+    this.stopHeartbeatTimers(socket);
+    socket.disconnect(true);
+    this.connectionManager.removeSocket(socketId);
+  }
+
+  private stopHeartbeatTimers(socket: Socket) {
+    const data = socket.data as AuthenticatedSocketData;
+    if (data) {
+      if (data.heartbeatIntervalTimer) {
+        clearInterval(data.heartbeatIntervalTimer);
+        data.heartbeatIntervalTimer = undefined;
+      }
+      if (data.pongTimeoutTimer) {
+        clearTimeout(data.pongTimeoutTimer);
+        data.pongTimeoutTimer = undefined;
+      }
+    }
+  }
+
+  @SubscribeMessage('pong')
+  handlePongMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: ClientPongPayload,
+  ): void {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data) return;
+
+    const pongReceivedAt = Date.now();
+    data.lastPongReceivedAt = pongReceivedAt;
+
+    // Disarm pong timeout watchdog timer
+    if (data.pongTimeoutTimer) {
+      clearTimeout(data.pongTimeoutTimer);
+      data.pongTimeoutTimer = undefined;
+    }
+
+    // Measure Round-Trip Latency (RTT)
+    const pingSentAt = data.lastPingSentAt || payload?.pingServerTime;
+    if (pingSentAt && typeof pingSentAt === 'number') {
+      const rtt = Math.max(0, pongReceivedAt - pingSentAt);
+      data.rttLatencyMs = rtt;
+      this.logger.debug(
+        `Received pong from socket ${client.id} (user: ${data.userId}): RTT = ${rtt}ms`,
+      );
+    }
   }
 }
