@@ -38,6 +38,9 @@ export class WsRoomAuthorizerService {
       case 'conversation':
         return this.authorizeConversationRoom(socketData, resourceId, trimmedRoom);
 
+      case 'session':
+        return this.authorizeRealtimeSessionRoom(socketData, resourceId, trimmedRoom);
+
       case 'fleet':
         if (resourceId === 'monitoring') {
           return this.authorizeFleetMonitoringRoom(socketData, trimmedRoom);
@@ -132,6 +135,43 @@ export class WsRoomAuthorizerService {
 
     this.logger.warn(
       `Anti-IDOR rejection: User ${userId} attempted to access conversation ${conversationId} without participant membership`,
+    );
+    return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
+  }
+
+  private async authorizeRealtimeSessionRoom(
+    socketData: AuthenticatedSocketData,
+    sessionId: string,
+    normalizedRoom: string,
+  ): Promise<RoomAuthorizationResult> {
+    if (!sessionId) {
+      return { authorized: false, reason: 'MISSING_SESSION_ID' };
+    }
+
+    const { userId, driverId, role } = socketData;
+
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      return { authorized: true, normalizedRoom };
+    }
+
+    const session = await this.prisma.realtimeSession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, ownerId: true, driverId: true },
+    });
+
+    if (!session) {
+      return { authorized: false, reason: 'SESSION_NOT_FOUND' };
+    }
+
+    const isOwner = session.ownerId === userId;
+    const isDriver = driverId && session.driverId === driverId;
+
+    if (isOwner || isDriver) {
+      return { authorized: true, normalizedRoom };
+    }
+
+    this.logger.warn(
+      `Anti-IDOR rejection: User ${userId} attempted to access call session room ${sessionId}`,
     );
     return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
   }

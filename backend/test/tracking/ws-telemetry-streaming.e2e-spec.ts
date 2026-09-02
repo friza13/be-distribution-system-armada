@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, HttpStatus, ValidationPipe } from '@nestjs/common';
 import { io, Socket } from 'socket.io-client';
 import * as jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { AppModule } from '../../src/app.module';
+import { GlobalExceptionFilter } from '../../src/common/filters/global-exception.filter';
+import { TransformInterceptor } from '../../src/common/interceptors/transform.interceptor';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { RedisService } from '../../src/common/redis/redis.service';
 import { hashPassword } from '../../src/common/utils/password.util';
@@ -170,8 +172,9 @@ describe('Redis Telemetry Cache & Realtime Live Map Streaming (E2E)', () => {
   });
 
   it('should NOT overwrite Redis cache if incoming GPS point is out-of-order (recordedAt older)', async () => {
-    const newerTime = new Date('2026-09-02T10:10:00.000Z').toISOString();
-    const olderTime = new Date('2026-09-02T10:05:00.000Z').toISOString();
+    const nowMs = Date.now();
+    const newerTime = new Date(nowMs - 10000).toISOString();
+    const olderTime = new Date(nowMs - 30000).toISOString();
 
     // 1. Set newer location first
     await trackingCacheService.setLatestLocation(driverEntityA.id, {
@@ -210,20 +213,31 @@ describe('Redis Telemetry Cache & Realtime Live Map Streaming (E2E)', () => {
 
     // Owner joins fleet:monitoring room
     const joinPromise = new Promise<any>((resolve) => {
-      ownerClient.on('room_joined', (data) => resolve(data));
+      ownerClient.on('room_joined', (data) => resolve({ type: 'joined', data }));
+      ownerClient.on('room_error', (err) => resolve({ type: 'error', err }));
     });
     ownerClient.emit('join_room', { room: 'fleet:monitoring' });
-    await joinPromise;
+    const joinResult = await joinPromise;
+    console.log('joinResult for fleet:monitoring:', joinResult);
 
     // Set listener for location update on Owner client
     const locationUpdatePromise = new Promise<RealtimeEventEnvelope>((resolve) => {
       ownerClient.on('driver.location.updated', (event: RealtimeEventEnvelope) => {
         resolve(event);
       });
+      driverClient.on('location_error', (err) => {
+        console.error('location_error:', err);
+      });
     });
 
     // Driver emits driver.location.update via WebSocket
     const recordedAt = new Date().toISOString();
+
+    const responsePromise = new Promise<any>((resolve) => {
+      driverClient.on('location_accepted', (data) => resolve({ type: 'accepted', data }));
+      driverClient.on('location_error', (err) => resolve({ type: 'error', err }));
+    });
+
     driverClient.emit('driver.location.update', {
       latitude: -6.2050,
       longitude: 106.8150,
@@ -231,6 +245,9 @@ describe('Redis Telemetry Cache & Realtime Live Map Streaming (E2E)', () => {
       recordedAt,
       deliveryId: deliveryA.id,
     });
+
+    const driverResponse = await responsePromise;
+    console.log('driverResponse:', driverResponse);
 
     // Verify Owner receives live map broadcast
     const event = await locationUpdatePromise;

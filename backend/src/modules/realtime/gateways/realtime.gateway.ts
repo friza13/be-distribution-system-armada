@@ -16,9 +16,19 @@ import { WsConnectionManagerService } from '../services/ws-connection-manager.se
 import { WsRoomAuthorizerService } from '../services/ws-room-authorizer.service';
 import { RedisService } from '../../../common/redis/redis.service';
 import { TrackingService } from '../../tracking/services/tracking.service';
+import { MessagesService } from '../../conversations/messages.service';
+import { CallSessionService } from '../../communication/services/call-session.service';
 import { formatRealtimeEvent } from '../dto/realtime-envelope.dto';
 import { JoinRoomDto, LeaveRoomDto } from '../dto/join-room.dto';
 import { LocationIngestionDto } from '../../tracking/dto/location-ingestion.dto';
+import { ChatSendWsDto, ChatAckWsDto } from '../../conversations/dto/chat-send-ws.dto';
+import {
+  WebrtcRespondWsDto,
+  WebrtcOfferWsDto,
+  WebrtcAnswerWsDto,
+  WebrtcIceCandidateWsDto,
+  WebrtcHangupWsDto,
+} from '../../communication/dto/webrtc-signal-ws.dto';
 
 export interface RevocationEventPayload {
   type: 'USER_REVOKED' | 'DEVICE_REVOKED' | 'SESSION_REVOKED';
@@ -61,6 +71,10 @@ export class RealtimeGateway
     private readonly configService: ConfigService,
     @Inject(forwardRef(() => TrackingService))
     private readonly trackingService: TrackingService,
+    @Inject(forwardRef(() => MessagesService))
+    private readonly messagesService: MessagesService,
+    @Inject(forwardRef(() => CallSessionService))
+    private readonly callSessionService: CallSessionService,
   ) {
     this.heartbeatIntervalMs = this.configService.get<number>(
       'realtime.heartbeatIntervalMs',
@@ -434,6 +448,194 @@ export class RealtimeGateway
         code,
         message,
       });
+    }
+  }
+
+  @SubscribeMessage('chat.message.send')
+  async handleChatMessageSend(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: ChatSendWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) {
+      client.emit('chat_error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
+      return;
+    }
+
+    try {
+      const result = await this.messagesService.sendMessage(
+        dto.conversationId,
+        {
+          recipientDeviceId: dto.recipientDeviceId,
+          protocolVersion: dto.protocolVersion,
+          ciphertextBlob: dto.ciphertextBlob,
+          headerJson: dto.headerJson,
+          idempotencyKey: dto.idempotencyKey,
+        },
+        {
+          userId: data.userId,
+          role: data.role,
+          driverId: data.driverId,
+          deviceId: data.deviceId,
+        },
+        '/v1/realtime',
+      );
+
+      // Emit ACK to sender
+      const ackEnvelope = formatRealtimeEvent(
+        'chat.message.ack',
+        { messageId: result.id, status: 'SENT', createdAt: result.createdAt },
+        { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
+      );
+      client.emit('chat.message.ack', ackEnvelope);
+
+      // Relay ciphertext envelope to room conversation:<id>
+      if (!result.idempotent) {
+        const relayedEnvelope = formatRealtimeEvent(
+          'chat.message.relayed',
+          {
+            messageId: result.id,
+            conversationId: result.conversationId,
+            senderUserId: result.senderUserId,
+            senderDeviceId: result.senderDeviceId,
+            recipientDeviceId: result.recipientDeviceId,
+            protocolVersion: result.protocolVersion,
+            ciphertextBlob: result.ciphertextBlob,
+            headerJson: result.headerJson,
+            createdAt: result.createdAt,
+          },
+          { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
+        );
+
+        this.server.to(`conversation:${dto.conversationId}`).emit('chat.message.relayed', relayedEnvelope);
+      }
+    } catch (err: unknown) {
+      let code = 'CHAT_SEND_FAILED';
+      let message = 'Failed to process message';
+      if (err && typeof err === 'object' && 'getResponse' in err) {
+        const resp = (err as any).getResponse();
+        code = resp?.code || code;
+        message = resp?.message || message;
+      }
+      client.emit('chat_error', { code, message });
+    }
+  }
+
+  @SubscribeMessage('webrtc.call.respond')
+  async handleWebrtcCallRespond(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: WebrtcRespondWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) return;
+
+    try {
+      const updated = await this.callSessionService.respondToCallSession(
+        dto.sessionId,
+        dto.action,
+        { userId: data.userId, role: data.role, driverId: data.driverId },
+      );
+
+      // Join socket to session room upon acceptance
+      if (dto.action === 'ACCEPT') {
+        client.join(`session:${dto.sessionId}`);
+        data.joinedRooms.add(`session:${dto.sessionId}`);
+      }
+    } catch (err: unknown) {
+      let code = 'CALL_RESPOND_FAILED';
+      let message = 'Failed to process call response';
+      if (err && typeof err === 'object' && 'getResponse' in err) {
+        const resp = (err as any).getResponse();
+        code = resp?.code || code;
+        message = resp?.message || message;
+      }
+      client.emit('call_error', { code, message });
+    }
+  }
+
+  @SubscribeMessage('webrtc.signal.offer')
+  async handleWebrtcSignalOffer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: WebrtcOfferWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) return;
+
+    try {
+      const envelope = formatRealtimeEvent(
+        'webrtc.signal.offer',
+        { sessionId: dto.sessionId, sdp: dto.sdp },
+        { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
+      );
+      this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.offer', envelope);
+    } catch (err: unknown) {
+      client.emit('call_error', { code: 'SIGNALING_FAILED', message: 'Failed to relay offer' });
+    }
+  }
+
+  @SubscribeMessage('webrtc.signal.answer')
+  async handleWebrtcSignalAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: WebrtcAnswerWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) return;
+
+    try {
+      const envelope = formatRealtimeEvent(
+        'webrtc.signal.answer',
+        { sessionId: dto.sessionId, sdp: dto.sdp },
+        { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
+      );
+      this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.answer', envelope);
+    } catch (err: unknown) {
+      client.emit('call_error', { code: 'SIGNALING_FAILED', message: 'Failed to relay answer' });
+    }
+  }
+
+  @SubscribeMessage('webrtc.signal.ice_candidate')
+  async handleWebrtcSignalIceCandidate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: WebrtcIceCandidateWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) return;
+
+    try {
+      // ICE candidate rate limiting per session (Max 50 candidates per socket)
+      const candidateCount = await this.redis.incrRateLimit(`throttle:ice:${client.id}:${dto.sessionId}`, 60);
+      if (candidateCount > 50) {
+        client.emit('call_error', { code: 'ICE_CANDIDATE_LIMIT_EXCEEDED', message: 'Too many ICE candidates' });
+        return;
+      }
+
+      const envelope = formatRealtimeEvent(
+        'webrtc.signal.ice_candidate',
+        { sessionId: dto.sessionId, candidate: dto.candidate },
+        { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
+      );
+      this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.ice_candidate', envelope);
+    } catch (err: unknown) {
+      client.emit('call_error', { code: 'SIGNALING_FAILED', message: 'Failed to relay ICE candidate' });
+    }
+  }
+
+  @SubscribeMessage('webrtc.call.hangup')
+  async handleWebrtcCallHangup(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() dto: WebrtcHangupWsDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) return;
+
+    try {
+      await this.callSessionService.endCallSession(dto.sessionId, {
+        userId: data.userId,
+        role: data.role,
+        driverId: data.driverId,
+      });
+    } catch (err: unknown) {
+      client.emit('call_error', { code: 'HANGUP_FAILED', message: 'Failed to end call' });
     }
   }
 }
