@@ -302,6 +302,25 @@ describe('Route Management & Optimization REST APIs (E2E)', () => {
     expect(res.body.data.versions[0].version).toBe(3);
   });
 
+  it('should preserve historical route stops sequence immutability for past versions', async () => {
+    // Query historical Route Version 1 from DB
+    const routeV1 = await prisma.route.findFirst({
+      where: { deliveryId: deliveryA.id, version: 1 },
+      include: {
+        routeStops: {
+          orderBy: { sequence: 'asc' },
+        },
+      },
+    });
+
+    expect(routeV1).toBeDefined();
+    expect(routeV1?.version).toBe(1);
+    // Version 1 had sequence: stopA1 -> stopA3 -> stopA2
+    expect(routeV1?.routeStops[0].deliveryStopId).toBe(stopA1.id);
+    expect(routeV1?.routeStops[1].deliveryStopId).toBe(stopA3.id);
+    expect(routeV1?.routeStops[2].deliveryStopId).toBe(stopA2.id);
+  });
+
   it('should REJECT Driver B attempting to recommend or modify Delivery A route (Anti-IDOR protection)', async () => {
     const res = await request(app.getHttpServer())
       .post(`/v1/deliveries/${deliveryA.id}/routes/recommend`)

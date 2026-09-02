@@ -93,7 +93,7 @@ describe('Route Optimization Engine ($N <= 5$ Exhaustive & $N > 5$ 2-Opt) (Unit 
     });
   });
 
-  describe('3. Edge Cases (Single Stop)', () => {
+  describe('3. Edge Cases & Objective Function Verification', () => {
     it('should handle single stop gracefully without optimization', async () => {
       const singlePoint = [mockWaypoints5[0]];
       const result = await routeOptimizerService.optimizeRoute(singlePoint, 'haversine');
@@ -101,6 +101,32 @@ describe('Route Optimization Engine ($N <= 5$ Exhaustive & $N > 5$ 2-Opt) (Unit 
       expect(result.orderedWaypoints.length).toBe(1);
       expect(result.totalDistanceM).toBe(0);
       expect(result.sequenceMap[0].sequence).toBe(1);
+    });
+
+    it('should break ties deterministically on secondary distance metric when duration is equal', () => {
+      const waypoints: Waypoint[] = [
+        { id: 'stop-A', latitude: 0, longitude: 0 },
+        { id: 'stop-B', latitude: 0, longitude: 1 },
+        { id: 'stop-C', latitude: 0, longitude: 2 },
+      ];
+
+      // Equal durations (10s each way), but different distances (100m vs 200m)
+      const durations = [
+        [0, 10, 10],
+        [10, 0, 10],
+        [10, 10, 0],
+      ];
+      const distances = [
+        [0, 100, 200],
+        [100, 0, 100],
+        [200, 100, 0],
+      ];
+
+      const solution = solveExhaustivePermutation(waypoints, distances, durations, true);
+      expect(solution.orderedWaypoints[0].id).toBe('stop-A');
+      expect(solution.orderedWaypoints[1].id).toBe('stop-B');
+      expect(solution.orderedWaypoints[2].id).toBe('stop-C');
+      expect(solution.totalDistanceM).toBe(200); // 100 + 100
     });
   });
 });
