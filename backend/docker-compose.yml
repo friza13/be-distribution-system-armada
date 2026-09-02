@@ -6,9 +6,9 @@ services:
     container_name: dms_postgres_dev
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-distribution_db}
-      POSTGRES_USER: ${POSTGRES_USER:-dms_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD is required in .env}
+      POSTGRES_DB: "${POSTGRES_DB:-distribution_db}"
+      POSTGRES_USER: "${POSTGRES_USER:-dms_user}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD is required in .env}"
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:

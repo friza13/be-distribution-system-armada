@@ -1,0 +1,596 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum AccountStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum DriverOperationalStatus {
+  OFFLINE
+  AVAILABLE
+  ON_DELIVERY
+  EMERGENCY
+}
+
+enum VehicleType {
+  MOTORCYCLE
+  VAN
+  TRUCK_SMALL
+  TRUCK_LARGE
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum VehicleAssignmentStatus {
+  ACTIVE
+  COMPLETED
+  REVOKED
+}
+
+enum PlatformType {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum DeviceStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum DeliveryStatus {
+  DRAFT
+  ASSIGNED
+  ACCEPTED
+  EN_ROUTE
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum RouteMode {
+  MANUAL
+  RECOMMENDED_2OPT
+}
+
+enum StopStatus {
+  PENDING
+  EN_ROUTE
+  ARRIVED
+  UNLOADING
+  DELIVERED
+  FAILED
+  SKIPPED
+}
+
+enum RouteSource {
+  MANUAL
+  RECOMMENDED_2OPT
+  EXTERNAL_OSRM
+}
+
+enum ConflictStatus {
+  OPEN
+  RESOLVED_OVERRIDDEN
+  RESOLVED_DISCARDED
+}
+
+enum EmergencyStatus {
+  TRIGGERED
+  ACKNOWLEDGED
+  RESOLVED
+  FALSE_ALARM
+}
+
+enum ConversationType {
+  DIRECT_1TO1
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum RealtimeSessionType {
+  VOICE_PTT
+  VIDEO
+}
+
+enum RealtimeSessionStatus {
+  PENDING
+  ACTIVE
+  DECLINED
+  TIMEOUT
+  ENDED
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+}
+
+model Role {
+  id              String           @id @default(uuid()) @db.Uuid
+  code            String           @unique @db.VarChar(50)
+  name            String           @db.VarChar(100)
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id              String           @id @default(uuid()) @db.Uuid
+  code            String           @unique @db.VarChar(100)
+  description     String?          @db.Text
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id                    String              @id @default(uuid()) @db.Uuid
+  username              String              @unique @db.VarChar(50)
+  email                 String?             @unique @db.VarChar(100)
+  phone                 String              @unique @db.VarChar(20)
+  passwordHash          String              @map("password_hash") @db.VarChar(255)
+  roleId                String              @map("role_id") @db.Uuid
+  status                AccountStatus       @default(PENDING_ACTIVATION)
+  createdBy             String?             @map("created_by") @db.Uuid
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastLoginAt           DateTime?           @map("last_login_at") @db.Timestamptz(3)
+  role                  Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  creator               User?               @relation("UserCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdUsers          User[]              @relation("UserCreator")
+  driver                Driver?
+  devices               Device[]
+  sessions              Session[]
+  createdDeliveries     Delivery[]          @relation("DeliveryCreator")
+  deliveryEvents        DeliveryEvent[]     @relation("EventActor")
+  proofsOfDelivery      ProofOfDelivery[]   @relation("PodCreator")
+  uploadedFiles         FileRecord[]        @relation("FileUploader")
+  auditLogs             AuditLog[]          @relation("AuditActor")
+  resolvedEmergencies   Emergency[]         @relation("EmergencyResolver")
+  resolvedConflicts     DeliveryConflict[]  @relation("ConflictResolver")
+  ownedConversations    Conversation[]      @relation("ConversationOwner")
+  sentMessages          Message[]           @relation("MessageSender")
+  ownedRealtimeSessions RealtimeSession[]   @relation("SessionOwner")
+  notifications         Notification[]      @relation("UserNotifications")
+  idempotencyRecords    IdempotencyRecord[] @relation("UserIdempotency")
+
+  @@map("users")
+}
+
+model Driver {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  userId                 String                  @unique @map("user_id") @db.Uuid
+  employeeCode           String                  @unique @map("employee_code") @db.VarChar(50)
+  displayName            String                  @map("display_name") @db.VarChar(100)
+  phone                  String                  @db.VarChar(20)
+  activeVehicleId        String?                 @map("active_vehicle_id") @db.Uuid
+  operationalStatus      DriverOperationalStatus @default(OFFLINE) @map("operational_status")
+  user                   User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  assignments            VehicleAssignment[]
+  deliveries             Delivery[]
+  emergencies            Emergency[]
+  conversations          Conversation[]          @relation("ConversationDriver")
+  driverRealtimeSessions RealtimeSession[]       @relation("SessionDriver")
+
+  @@map("drivers")
+}
+
+model Vehicle {
+  id               String              @id @default(uuid()) @db.Uuid
+  plateNumber      String              @unique @map("plate_number") @db.VarChar(20)
+  vehicleType      VehicleType         @map("vehicle_type")
+  capacityWeightKg Decimal             @map("capacity_weight_kg") @db.Decimal(10, 2)
+  capacityVolumeM3 Decimal?            @map("capacity_volume_m3") @db.Decimal(10, 2)
+  status           VehicleStatus       @default(ACTIVE)
+  notes            String?             @db.Text
+  assignments      VehicleAssignment[]
+  deliveries       Delivery[]
+
+  @@map("vehicles")
+}
+
+model VehicleAssignment {
+  id        String                  @id @default(uuid()) @db.Uuid
+  driverId  String                  @map("driver_id") @db.Uuid
+  vehicleId String                  @map("vehicle_id") @db.Uuid
+  startedAt DateTime                @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt   DateTime?               @map("ended_at") @db.Timestamptz(3)
+  status    VehicleAssignmentStatus @default(ACTIVE)
+  driver    Driver                  @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle   Vehicle                 @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  @@index([driverId, status])
+  @@index([vehicleId, status])
+  @@map("vehicle_assignments")
+}
+
+model Device {
+  id                String         @id @default(uuid()) @db.Uuid
+  userId            String         @map("user_id") @db.Uuid
+  deviceIdentifier  String         @map("device_identifier") @db.VarChar(100)
+  platform          PlatformType
+  appVersion        String         @map("app_version") @db.VarChar(50)
+  pushToken         String?        @map("push_token") @db.Text
+  status            DeviceStatus   @default(ACTIVE)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime       @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions          Session[]
+  deviceKey         DeviceKey?
+  prekeys           Prekey[]
+  notifications     Notification[]
+  sentMessages      Message[]      @relation("SenderDevice")
+  receivedMessages  Message[]      @relation("RecipientDevice")
+
+  @@map("devices")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  deviceId         String    @map("device_id") @db.Uuid
+  refreshTokenHash String    @map("refresh_token_hash") @db.VarChar(255)
+  tokenFamily      String    @map("token_family") @db.Uuid
+  isRevoked        Boolean   @default(false) @map("is_revoked")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastRefreshedAt  DateTime  @default(now()) @map("last_refreshed_at") @db.Timestamptz(3)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device           Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([tokenFamily])
+  @@index([userId, isRevoked])
+  @@map("sessions")
+}
+
+model DeviceKey {
+  id                 String   @id @default(uuid()) @db.Uuid
+  deviceId           String   @unique @map("device_id") @db.Uuid
+  identityKeyPublic  String   @map("identity_key_public") @db.Text
+  signedPrekeyPublic String   @map("signed_prekey_public") @db.Text
+  signedPrekeySig    String   @map("signed_prekey_sig") @db.Text
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  device             Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@map("device_keys")
+}
+
+model Prekey {
+  id         String    @id @default(uuid()) @db.Uuid
+  deviceId   String    @map("device_id") @db.Uuid
+  keyId      Int       @map("key_id")
+  publicKey  String    @map("public_key") @db.Text
+  isConsumed Boolean   @default(false) @map("is_consumed")
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  device     Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, keyId])
+  @@index([deviceId, isConsumed])
+  @@map("prekeys")
+}
+
+model Delivery {
+  id             String             @id @default(uuid()) @db.Uuid
+  deliveryCode   String             @unique @map("delivery_code") @db.VarChar(50)
+  driverId       String?            @map("driver_id") @db.Uuid
+  vehicleId      String?            @map("vehicle_id") @db.Uuid
+  status         DeliveryStatus     @default(DRAFT)
+  routeMode      RouteMode          @default(RECOMMENDED_2OPT) @map("route_mode")
+  plannedStartAt DateTime?          @map("planned_start_at") @db.Timestamptz(3)
+  startedAt      DateTime?          @map("started_at") @db.Timestamptz(3)
+  completedAt    DateTime?          @map("completed_at") @db.Timestamptz(3)
+  createdBy      String             @map("created_by") @db.Uuid
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  driver         Driver?            @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle        Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  creator        User               @relation("DeliveryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  items          DeliveryItem[]
+  stops          DeliveryStop[]
+  routes         Route[]
+  events         DeliveryEvent[]
+  conflicts      DeliveryConflict[]
+  emergencies    Emergency[]
+  sessions       RealtimeSession[]
+
+  @@index([driverId, status])
+  @@index([createdBy])
+  @@map("deliveries")
+}
+
+model DeliveryItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  deliveryId String   @map("delivery_id") @db.Uuid
+  itemCode   String   @map("item_code") @db.VarChar(50)
+  itemName   String   @map("item_name") @db.VarChar(100)
+  quantity   Int
+  unit       String   @db.VarChar(20)
+  weightKg   Decimal? @map("weight_kg") @db.Decimal(10, 2)
+  volumeM3   Decimal? @map("volume_m3") @db.Decimal(10, 2)
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@map("delivery_items")
+}
+
+model DeliveryStop {
+  id              String            @id @default(uuid()) @db.Uuid
+  deliveryId      String            @map("delivery_id") @db.Uuid
+  sequence        Int
+  destinationName String            @map("destination_name") @db.VarChar(100)
+  address         String            @db.Text
+  latitude        Decimal           @db.Decimal(10, 7)
+  longitude       Decimal           @db.Decimal(10, 7)
+  geom            Unsupported("geometry(Point, 4326)")?
+  geofenceRadiusM Int               @default(100) @map("geofence_radius_m")
+  status          StopStatus        @default(PENDING)
+  arrivedAt       DateTime?         @map("arrived_at") @db.Timestamptz(3)
+  completedAt     DateTime?         @map("completed_at") @db.Timestamptz(3)
+  delivery        Delivery          @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  proofOfDelivery ProofOfDelivery?
+  routeStops      RouteStop[]
+  deliveryEvents  DeliveryEvent[]
+
+  @@unique([deliveryId, sequence])
+  @@map("delivery_stops")
+}
+
+model Route {
+  id                 String      @id @default(uuid()) @db.Uuid
+  deliveryId         String      @map("delivery_id") @db.Uuid
+  version            Int         @default(1)
+  source             RouteSource @default(RECOMMENDED_2OPT)
+  totalDistanceM     Decimal     @map("total_distance_m") @db.Decimal(12, 2)
+  estimatedDurationS Int         @map("estimated_duration_s")
+  polylineGeojson    Json?       @map("polyline_geojson")
+  selectedAt         DateTime    @default(now()) @map("selected_at") @db.Timestamptz(3)
+  delivery           Delivery    @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  routeStops         RouteStop[]
+
+  @@unique([deliveryId, version])
+  @@map("routes")
+}
+
+model RouteStop {
+  id             String       @id @default(uuid()) @db.Uuid
+  routeId        String       @map("route_id") @db.Uuid
+  deliveryStopId String       @map("delivery_stop_id") @db.Uuid
+  sequence       Int
+  route          Route        @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  deliveryStop   DeliveryStop @relation(fields: [deliveryStopId], references: [id], onDelete: Cascade)
+
+  @@unique([routeId, sequence])
+  @@unique([routeId, deliveryStopId])
+  @@map("route_stops")
+}
+
+model DeliveryEvent {
+  id               String        @id @default(uuid()) @db.Uuid
+  deliveryId       String        @map("delivery_id") @db.Uuid
+  stopId           String?       @map("stop_id") @db.Uuid
+  eventType        String        @map("event_type") @db.VarChar(50)
+  actorUserId      String        @map("actor_user_id") @db.Uuid
+  metadataJson     Json          @map("metadata_json")
+  clientOccurredAt DateTime?     @map("client_occurred_at") @db.Timestamptz(3)
+  occurredAt       DateTime      @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  receivedAt       DateTime      @default(now()) @map("received_at") @db.Timestamptz(3)
+  idempotencyKey   String?       @unique @map("idempotency_key") @db.Uuid
+  delivery         Delivery      @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  stop             DeliveryStop? @relation(fields: [stopId], references: [id], onDelete: SetNull)
+  actor            User          @relation("EventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([deliveryId, occurredAt])
+  @@map("delivery_events")
+}
+
+model ProofOfDelivery {
+  id              String       @id @default(uuid()) @db.Uuid
+  deliveryStopId  String       @unique @map("delivery_stop_id") @db.Uuid
+  receiverName    String       @map("receiver_name") @db.VarChar(100)
+  signatureFileId String?      @map("signature_file_id") @db.Uuid
+  photoFileId     String?      @map("photo_file_id") @db.Uuid
+  notes           String?      @db.Text
+  completedAt     DateTime     @default(now()) @map("completed_at") @db.Timestamptz(3)
+  createdBy       String       @map("created_by") @db.Uuid
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  deliveryStop    DeliveryStop @relation(fields: [deliveryStopId], references: [id], onDelete: Restrict)
+  creator         User         @relation("PodCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  signatureFile   FileRecord?  @relation("PodSignatureFile", fields: [signatureFileId], references: [id], onDelete: SetNull)
+  photoFile       FileRecord?  @relation("PodPhotoFile", fields: [photoFileId], references: [id], onDelete: SetNull)
+
+  @@map("proof_of_delivery")
+}
+
+model FileRecord {
+  id              String            @id @default(uuid()) @db.Uuid
+  objectKey       String            @unique @map("object_key") @db.VarChar(255)
+  mediaType       String            @map("media_type") @db.VarChar(100)
+  sizeBytes       Int               @map("size_bytes")
+  checksumSha256  String            @map("checksum_sha256") @db.VarChar(64)
+  uploadedBy      String            @map("uploaded_by") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  uploader        User              @relation("FileUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  signaturePods   ProofOfDelivery[] @relation("PodSignatureFile")
+  photoPods       ProofOfDelivery[] @relation("PodPhotoFile")
+
+  @@map("files")
+}
+
+model DeliveryConflict {
+  id              String         @id @default(uuid()) @db.Uuid
+  deliveryId      String         @map("delivery_id") @db.Uuid
+  clientEventId   String         @map("client_event_id") @db.VarChar(100)
+  conflictType    String         @map("conflict_type") @db.VarChar(50)
+  serverState     String         @map("server_state") @db.VarChar(50)
+  clientPayload   Json           @map("client_payload")
+  status          ConflictStatus @default(OPEN)
+  resolvedBy      String?        @map("resolved_by") @db.Uuid
+  resolutionNotes String?        @map("resolution_notes") @db.Text
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  resolvedAt      DateTime?      @map("resolved_at") @db.Timestamptz(3)
+  delivery        Delivery       @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+  resolver        User?          @relation("ConflictResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@map("delivery_conflicts")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String   @map("entity_type") @db.VarChar(50)
+  entityId    String   @map("entity_id") @db.VarChar(100)
+  beforeJson  Json?    @map("before_json")
+  afterJson   Json?    @map("after_json")
+  result      String   @db.VarChar(20)
+  requestId   String?  @map("request_id") @db.VarChar(36)
+  ipAddress   String?  @map("ip_address") @db.VarChar(45)
+  userAgent   String?  @map("user_agent") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@map("audit_logs")
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  key            String   @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  endpoint       String   @db.VarChar(100)
+  responseStatus Int      @map("response_status")
+  responseBody   Json     @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+  user           User     @relation("UserIdempotency", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId, endpoint])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
+model Emergency {
+  id            String          @id @default(uuid()) @db.Uuid
+  driverId      String          @map("driver_id") @db.Uuid
+  deliveryId    String?         @map("delivery_id") @db.Uuid
+  latitude      Decimal         @db.Decimal(10, 7)
+  longitude     Decimal         @db.Decimal(10, 7)
+  geom          Unsupported("geometry(Point, 4326)")?
+  emergencyType String          @map("emergency_type") @db.VarChar(50)
+  note          String?         @db.Text
+  status        EmergencyStatus @default(TRIGGERED)
+  triggeredAt   DateTime        @default(now()) @map("triggered_at") @db.Timestamptz(3)
+  resolvedAt    DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  resolvedBy    String?         @map("resolved_by") @db.Uuid
+  driver        Driver          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  delivery      Delivery?       @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  resolver      User?           @relation("EmergencyResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@map("emergencies")
+}
+
+model Conversation {
+  id        String             @id @default(uuid()) @db.Uuid
+  type      ConversationType   @default(DIRECT_1TO1)
+  ownerId   String             @map("owner_id") @db.Uuid
+  driverId  String             @map("driver_id") @db.Uuid
+  status    ConversationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  owner     User               @relation("ConversationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  driver    Driver             @relation("ConversationDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  messages  Message[]
+
+  @@unique([ownerId, driverId])
+  @@map("conversations")
+}
+
+model Message {
+  id                String       @id @default(uuid()) @db.Uuid
+  conversationId    String       @map("conversation_id") @db.Uuid
+  senderUserId      String       @map("sender_user_id") @db.Uuid
+  senderDeviceId    String       @map("sender_device_id") @db.Uuid
+  recipientDeviceId String       @map("recipient_device_id") @db.Uuid
+  protocolVersion   Int          @default(1) @map("protocol_version")
+  ciphertextBlob    String       @map("ciphertext_blob") @db.Text
+  headerJson        Json         @map("header_json")
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  deliveredAt       DateTime?    @map("delivered_at") @db.Timestamptz(3)
+  readAt            DateTime?    @map("read_at") @db.Timestamptz(3)
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender            User         @relation("MessageSender", fields: [senderUserId], references: [id], onDelete: Restrict)
+  senderDevice      Device       @relation("SenderDevice", fields: [senderDeviceId], references: [id], onDelete: Restrict)
+  recipientDevice   Device       @relation("RecipientDevice", fields: [recipientDeviceId], references: [id], onDelete: Restrict)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model RealtimeSession {
+  id         String                @id @default(uuid()) @db.Uuid
+  type       RealtimeSessionType
+  ownerId    String                @map("owner_id") @db.Uuid
+  driverId   String                @map("driver_id") @db.Uuid
+  deliveryId String?               @map("delivery_id") @db.Uuid
+  status     RealtimeSessionStatus @default(PENDING)
+  createdAt  DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt  DateTime              @map("expires_at") @db.Timestamptz(3)
+  startedAt  DateTime?             @map("started_at") @db.Timestamptz(3)
+  endedAt    DateTime?             @map("ended_at") @db.Timestamptz(3)
+  owner      User                  @relation("SessionOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  driver     Driver                @relation("SessionDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  delivery   Delivery?             @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, driverId])
+  @@index([status, expiresAt])
+  @@map("realtime_sessions")
+}
+
+model Notification {
+  id                String             @id @default(uuid()) @db.Uuid
+  userId            String             @map("user_id") @db.Uuid
+  deviceId          String?            @map("device_id") @db.Uuid
+  type              String             @db.VarChar(50)
+  title             String             @db.VarChar(255)
+  body              String             @db.Text
+  payloadJson       Json               @map("payload_json")
+  provider          String             @db.VarChar(50)
+  providerMessageId String?            @map("provider_message_id") @db.VarChar(100)
+  status            NotificationStatus @default(QUEUED)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  user              User               @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  device            Device?            @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@map("notifications")
+}
