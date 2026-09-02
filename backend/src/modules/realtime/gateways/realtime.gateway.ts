@@ -13,8 +13,10 @@ import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { WsJwtAuthGuard, AuthenticatedSocketData } from '../guards/ws-jwt-auth.guard';
 import { WsConnectionManagerService } from '../services/ws-connection-manager.service';
+import { WsRoomAuthorizerService } from '../services/ws-room-authorizer.service';
 import { RedisService } from '../../../common/redis/redis.service';
 import { formatRealtimeEvent } from '../dto/realtime-envelope.dto';
+import { JoinRoomDto, LeaveRoomDto } from '../dto/join-room.dto';
 
 export interface RevocationEventPayload {
   type: 'USER_REVOKED' | 'DEVICE_REVOKED' | 'SESSION_REVOKED';
@@ -52,6 +54,7 @@ export class RealtimeGateway
   constructor(
     private readonly wsJwtAuthGuard: WsJwtAuthGuard,
     private readonly connectionManager: WsConnectionManagerService,
+    private readonly roomAuthorizer: WsRoomAuthorizerService,
     private readonly redis: RedisService,
     private readonly configService: ConfigService,
   ) {
@@ -289,5 +292,94 @@ export class RealtimeGateway
         `Received pong from socket ${client.id} (user: ${data.userId}): RTT = ${rtt}ms`,
       );
     }
+  }
+
+  @SubscribeMessage('join_room')
+  async handleJoinRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: JoinRoomDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    if (!data || !data.userId) {
+      client.emit('room_error', {
+        code: 'UNAUTHENTICATED',
+        message: 'Authentication context required to join rooms',
+      });
+      return;
+    }
+
+    const room = body?.room;
+    if (!room || typeof room !== 'string') {
+      client.emit('room_error', {
+        code: 'INVALID_ROOM_FORMAT',
+        message: 'Valid room string is required',
+      });
+      return;
+    }
+
+    const authResult = await this.roomAuthorizer.authorizeRoomJoin(data, room);
+
+    if (!authResult.authorized) {
+      this.logger.warn(
+        `Room join denied for socket ${client.id} (userId: ${data.userId}, role: ${data.role}) to room '${room}': ${authResult.reason}`,
+      );
+      client.emit('room_error', {
+        code: authResult.reason || 'ROOM_ACCESS_DENIED',
+        room,
+        message: 'You are not authorized to subscribe to this channel',
+      });
+      return;
+    }
+
+    const targetRoom = authResult.normalizedRoom || room;
+    await client.join(targetRoom);
+    data.joinedRooms.add(targetRoom);
+
+    this.logger.log(
+      `Socket ${client.id} (userId: ${data.userId}) joined authorized room: ${targetRoom}`,
+    );
+
+    const roomJoinedEvent = formatRealtimeEvent(
+      'room.joined',
+      { room: targetRoom },
+      {
+        userId: data.userId,
+        role: data.role,
+        deviceId: data.deviceId,
+        driverId: data.driverId,
+      },
+    );
+
+    client.emit('room_joined', roomJoinedEvent);
+  }
+
+  @SubscribeMessage('leave_room')
+  async handleLeaveRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: LeaveRoomDto,
+  ): Promise<void> {
+    const data = client.data as AuthenticatedSocketData;
+    const room = body?.room;
+    if (!room || typeof room !== 'string') return;
+
+    await client.leave(room);
+    if (data?.joinedRooms) {
+      data.joinedRooms.delete(room);
+    }
+
+    this.logger.log(`Socket ${client.id} left room: ${room}`);
+
+    const roomLeftEvent = formatRealtimeEvent(
+      'room.left',
+      { room },
+      {
+        userId: data?.userId || 'anonymous',
+        role: data?.role || 'UNKNOWN',
+        deviceId: data?.deviceId,
+        driverId: data?.driverId,
+      },
+    );
+
+    client.emit('room_left', roomLeftEvent);
   }
 }
