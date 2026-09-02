@@ -47,7 +47,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async isRevoked(key: string): Promise<boolean> {
     if (!this.client || !this.isConnected) {
-      return false; // Fallback will check DB
+      return false;
     }
     try {
       const exists = await this.client.exists(key);
@@ -67,6 +67,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Failed to set Redis revocation for ${key}: ${message}`);
     }
+  }
+
+  async incrRateLimit(key: string, windowSeconds: number): Promise<number> {
+    if (!this.client || !this.isConnected) {
+      return 1; // Allow if Redis is unavailable
+    }
+    try {
+      const count = await this.client.incr(key);
+      if (count === 1) {
+        await this.client.expire(key, windowSeconds);
+      }
+      return count;
+    } catch {
+      return 1;
+    }
+  }
+
+  async resetRateLimit(key: string): Promise<void> {
+    if (!this.client || !this.isConnected) {
+      return;
+    }
+    try {
+      await this.client.del(key);
+    } catch {}
   }
 
   async publish(channel: string, message: string): Promise<void> {

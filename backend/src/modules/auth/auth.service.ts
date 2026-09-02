@@ -2,12 +2,15 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { SessionService } from '../sessions/session.service';
 import {
   hashPassword,
@@ -15,7 +18,6 @@ import {
   dummyVerifyPassword,
   needsRehash,
 } from '../../common/utils/password.util';
-import { generateSecureToken } from '../../common/utils/token.util';
 import { LoginDto, ClientType } from './dto/login.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 
@@ -28,6 +30,7 @@ export class AuthService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly sessionService: SessionService,
@@ -43,6 +46,32 @@ export class AuthService {
     userAgent: string,
     res?: Response,
   ) {
+    // 1. Two-Dimensional Rate Limiting
+    // IP-level Throttling: Max 30 attempts per 5 minutes per IP
+    const ipAttempts = await this.redis.incrRateLimit(`throttle:login:ip:${clientIp}`, 300);
+    if (ipAttempts > 30) {
+      throw new HttpException(
+        {
+          code: 'LOGIN_RATE_LIMITED',
+          message: 'Too many login attempts from this IP address. Please try again in 5 minutes.',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // Account-level Throttling: Max 5 failed attempts per 5 minutes per username
+    const userAttempts = await this.redis.incrRateLimit(`throttle:login:user:${dto.username}`, 300);
+    if (userAttempts > 5) {
+      throw new HttpException(
+        {
+          code: 'LOGIN_RATE_LIMITED',
+          message: 'Too many failed login attempts for this account. Please try again in 5 minutes.',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // 2. User Lookup & Timing Equalization
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [{ username: dto.username }, { email: dto.username }, { phone: dto.username }],
@@ -52,6 +81,17 @@ export class AuthService {
 
     if (!user) {
       await dummyVerifyPassword(dto.password);
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'LOGIN_FAILURE',
+          entityType: 'AUTH',
+          entityId: dto.username,
+          result: 'FAILED',
+          ipAddress: clientIp,
+          userAgent,
+          afterJson: { reason: 'USER_NOT_FOUND' },
+        },
+      });
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid username or password',
@@ -67,11 +107,26 @@ export class AuthService {
 
     const isMatch = await verifyPassword(user.passwordHash, dto.password);
     if (!isMatch) {
+      await this.prisma.auditLog.create({
+        data: {
+          actorUserId: user.id,
+          action: 'LOGIN_FAILURE',
+          entityType: 'USER',
+          entityId: user.id,
+          result: 'FAILED',
+          ipAddress: clientIp,
+          userAgent,
+          afterJson: { reason: 'PASSWORD_MISMATCH' },
+        },
+      });
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid username or password',
       });
     }
+
+    // Login Succeeded: Reset Account-level failed attempt count
+    await this.redis.resetRateLimit(`throttle:login:user:${dto.username}`);
 
     // Transparent password rehash if parameters upgraded
     if (needsRehash(user.passwordHash)) {
@@ -124,7 +179,7 @@ export class AuthService {
       },
     });
 
-    // Update lastLoginAt & Audit Log
+    // Update lastLoginAt & Audit Log (WITHOUT SECRETS)
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
@@ -144,13 +199,12 @@ export class AuthService {
 
     // Dual Transport Strategy:
     if (dto.clientType === ClientType.WEB && res) {
-      // Set HttpOnly Secure Cookie for Admin Web
       res.cookie('dms_refresh_token', sessionResult.rawRefreshToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
         path: '/v1/auth',
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        maxAge: 7 * 24 * 60 * 60 * 1000,
       });
 
       return {
@@ -165,7 +219,7 @@ export class AuthService {
       };
     }
 
-    // Mobile Strategy: Return Refresh Token in JSON Response
+    // Mobile Strategy
     return {
       accessToken,
       refreshToken: sessionResult.rawRefreshToken,
