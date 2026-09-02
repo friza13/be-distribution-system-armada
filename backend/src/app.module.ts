@@ -15,6 +15,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { TrackingModule } from './modules/tracking/tracking.module';
 import { FleetModule } from './modules/fleet/fleet.module';
 import { RoutesModule } from './modules/routes/routes.module';
+import { PodModule } from './modules/pod/pod.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -40,6 +41,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     TrackingModule,
     FleetModule,
     RoutesModule,
+    PodModule,
     HealthModule,
   ],
 })
