@@ -27,8 +27,30 @@ export class WsConnectionManagerService {
       return;
     }
 
-    const { userId, sessionId, deviceId, driverId } = data;
+    const { userId, sessionId, deviceId, driverId, role } = data;
     const socketId = socket.id;
+
+    // Driver Single Active Socket Policy:
+    // If role is DRIVER and driverId exists, check if there is an older active socket.
+    // If found, immediately disconnect the older socket with reason SUPERSEDED_BY_NEW_LOGIN.
+    if (role === 'DRIVER' && driverId) {
+      const existingSocketId = this.driverSockets.get(driverId);
+      if (existingSocketId && existingSocketId !== socketId) {
+        const existingSocket = this.sockets.get(existingSocketId);
+        if (existingSocket) {
+          this.logger.log(
+            `Superseding older driver socket ${existingSocketId} for driver ${driverId}`,
+          );
+          existingSocket.emit('disconnect_notice', {
+            event: 'disconnect_notice',
+            reason: 'SUPERSEDED_BY_NEW_LOGIN',
+            timestamp: new Date().toISOString(),
+          });
+          existingSocket.disconnect(true);
+          this.removeSocket(existingSocketId);
+        }
+      }
+    }
 
     this.sockets.set(socketId, socket);
 
@@ -130,5 +152,55 @@ export class WsConnectionManagerService {
 
   getActiveConnectionCount(): number {
     return this.sockets.size;
+  }
+
+  disconnectSession(sessionId: string, reason: string = 'SESSION_REVOKED'): boolean {
+    const socket = this.getSocketBySessionId(sessionId);
+    if (socket) {
+      this.logger.log(`Disconnecting socket ${socket.id} due to session revocation (${sessionId}): ${reason}`);
+      socket.emit('disconnect_notice', {
+        event: 'disconnect_notice',
+        reason,
+        sessionId,
+        timestamp: new Date().toISOString(),
+      });
+      socket.disconnect(true);
+      this.removeSocket(socket.id);
+      return true;
+    }
+    return false;
+  }
+
+  disconnectDevice(deviceId: string, reason: string = 'DEVICE_REVOKED'): boolean {
+    const socket = this.getSocketByDeviceId(deviceId);
+    if (socket) {
+      this.logger.log(`Disconnecting socket ${socket.id} due to device revocation (${deviceId}): ${reason}`);
+      socket.emit('disconnect_notice', {
+        event: 'disconnect_notice',
+        reason,
+        deviceId,
+        timestamp: new Date().toISOString(),
+      });
+      socket.disconnect(true);
+      this.removeSocket(socket.id);
+      return true;
+    }
+    return false;
+  }
+
+  disconnectUser(userId: string, reason: string = 'USER_REVOKED'): number {
+    const sockets = this.getSocketsByUserId(userId);
+    this.logger.log(`Disconnecting ${sockets.length} socket(s) for revoked user ${userId}: ${reason}`);
+    for (const socket of sockets) {
+      socket.emit('disconnect_notice', {
+        event: 'disconnect_notice',
+        reason,
+        userId,
+        timestamp: new Date().toISOString(),
+      });
+      socket.disconnect(true);
+      this.removeSocket(socket.id);
+    }
+    return sockets.length;
   }
 }

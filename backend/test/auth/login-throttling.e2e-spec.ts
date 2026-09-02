@@ -5,6 +5,7 @@ import { AppModule } from '../../src/app.module';
 import { GlobalExceptionFilter } from '../../src/common/filters/global-exception.filter';
 import { TransformInterceptor } from '../../src/common/interceptors/transform.interceptor';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
+import { RedisService } from '../../src/common/redis/redis.service';
 import { hashPassword } from '../../src/common/utils/password.util';
 
 describe('Login Throttling & Audit Logging (E2E)', () => {
@@ -26,6 +27,12 @@ describe('Login Throttling & Audit Logging (E2E)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    const redis = app.get(RedisService);
+    if (redis && redis.resetRateLimit) {
+      await redis.resetRateLimit('throttle:login:ip:127.0.0.1');
+      await redis.resetRateLimit('throttle:login:ip:::ffff:127.0.0.1');
+      await redis.resetRateLimit('throttle:login:ip:::1');
+    }
 
     const ownerRole = await prisma.role.upsert({
       where: { code: 'OWNER' },

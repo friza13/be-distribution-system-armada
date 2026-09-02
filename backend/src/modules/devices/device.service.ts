@@ -121,6 +121,8 @@ export class DeviceService {
         type: 'DEVICE_REVOKED',
         deviceId,
         userId: device.userId,
+        reason: 'DEVICE_REVOKED',
+        timestamp: new Date().toISOString(),
       }),
     );
 

@@ -86,6 +86,17 @@ export class UsersService {
     // Write Redis user revocation key (TTL 15m) so JwtAuthGuard rejects older tokens immediately
     await this.redis.setRevocation(`revoked:user:${targetUserId}`, 900);
 
+    // Publish Realtime revocation event
+    await this.redis.publish(
+      'security:revocation',
+      JSON.stringify({
+        type: 'USER_REVOKED',
+        userId: targetUserId,
+        reason: 'ROLE_CHANGED',
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
     // Audit Log
     await this.prisma.auditLog.create({
       data: {
@@ -194,6 +205,17 @@ export class UsersService {
         result: 'SUCCESS',
       },
     });
+
+    // Publish Realtime revocation event
+    await this.redis.publish(
+      'security:revocation',
+      JSON.stringify({
+        type: 'USER_REVOKED',
+        userId: targetUserId,
+        reason: 'ADMIN_PASSWORD_RESET',
+        timestamp: new Date().toISOString(),
+      }),
+    );
 
     return { reset: true, userId: targetUserId };
   }

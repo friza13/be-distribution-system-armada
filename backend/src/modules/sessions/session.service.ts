@@ -145,6 +145,18 @@ export class SessionService {
       await this.redis.setRevocation(`revoked:session:${existingSession.id}`, 900);
       await this.redis.setRevocation(`revoked:user:${existingSession.userId}`, 900);
 
+      // Publish Realtime revocation event
+      await this.redis.publish(
+        'security:revocation',
+        JSON.stringify({
+          type: 'USER_REVOKED',
+          userId: existingSession.userId,
+          sessionId: existingSession.id,
+          reason: 'TOKEN_REUSE_DETECTED',
+          timestamp: new Date().toISOString(),
+        }),
+      );
+
       // Record Audit Alert
       await this.prisma.auditLog.create({
         data: {
@@ -214,6 +226,18 @@ export class SessionService {
     });
 
     await this.redis.setRevocation(`revoked:session:${sessionId}`, 900);
+
+    // Publish Realtime revocation event
+    await this.redis.publish(
+      'security:revocation',
+      JSON.stringify({
+        type: 'SESSION_REVOKED',
+        sessionId,
+        userId: session.userId,
+        reason: 'USER_LOGOUT',
+        timestamp: new Date().toISOString(),
+      }),
+    );
   }
 
   async revokeAllUserSessions(userId: string): Promise<void> {
@@ -223,5 +247,16 @@ export class SessionService {
     });
 
     await this.redis.setRevocation(`revoked:user:${userId}`, 900);
+
+    // Publish Realtime revocation event
+    await this.redis.publish(
+      'security:revocation',
+      JSON.stringify({
+        type: 'USER_REVOKED',
+        userId,
+        reason: 'LOGOUT_ALL_SESSIONS',
+        timestamp: new Date().toISOString(),
+      }),
+    );
   }
 }
