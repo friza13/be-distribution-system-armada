@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Distribution Management System (DMS) API
+  description: OpenAPI 3.0 specification for Armada Capstone DMS Backend API.
+  version: 2.0.0
+servers:
+  - url: /v1
+    description: Production API v1
+
+paths:
+  /me/location:
+    post:
+      summary: Ingest single GPS telemetry data point
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Location ingested successfully
+        '429':
+          description: Rate limit exceeded
+
+  /conversations:
+    post:
+      summary: Create 1:1 conversation between Owner/Admin and Driver
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Conversation created
+    get:
+      summary: List user conversations
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Conversations list
+
+  /conversations/{id}/messages:
+    get:
+      summary: Retrieve E2EE ciphertext message history
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Ciphertext messages list
+    post:
+      summary: Send E2EE encrypted message
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Ciphertext message saved
+
+  /voice-sessions:
+    post:
+      summary: Initiate Voice PTT Session with Ephemeral TURN credentials
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Voice session created with TURN credentials
+
+  /video-sessions:
+    post:
+      summary: Initiate Video Call Session
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Video session created
+
+  /realtime/sessions/{id}/respond:
+    post:
+      summary: Driver responds to incoming call (ACCEPT or DECLINE)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Call response processed
+
+  /realtime/sessions/{id}/end:
+    post:
+      summary: End active call session
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Call session ended
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
