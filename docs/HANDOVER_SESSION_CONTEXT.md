@@ -6,7 +6,24 @@
 **Node.js Runtime Baseline:** Node.js 22 LTS (Active LTS)  
 **Database / Infra:** PostgreSQL 16 + PostGIS 3.4 (port 5432), Redis 7 (port 6379)  
 **ORM:** Prisma ORM v5.22.0 (Strictly Pinned)  
-**Current Milestone State:** Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, Phase 7 & Phase 8 **CLOSED & VERIFIED**; Phase 9 **PENDING**.
+**Current Milestone State:** Phase 0 s/d Phase 18 **CLOSED & VERIFIED**; Remediation P0/P1/P2 (Commit `fac47c2` & `5fc38de`) **VERIFIED & MVP-READY**.
+
+---
+
+## Latest Remediation Checkpoint (2026-09-05)
+- **Audit & Remediation Master Doc:** `docs/reports/2026-09-05-GAP-AND-SECURITY-REMEDIATION-REVIEW.md`
+- **Implementation Spec & Plan:** `docs/superpowers/specs/2026-09-05-logic-security-remediation-design.md`, `docs/superpowers/plans/2026-09-05-logic-security-remediation-plan.md`
+- **Closed Remediation Scope:**
+  1. Route Terminal Guard (P0)
+  2. WebRTC Anti-Replay Defense with monotonic sequence & Redis atomic nonce claim (P0)
+  3. Multi-Tenant Organization Isolation in schema & fleet queries (P1)
+  4. Emergencies (SOS) Subsystem & real-time broadcast (P1)
+  5. Driver Operational Status Invariant (P1)
+  6. Transactional Outbox Schema Migration (P2)
+- **Verification Metrics:** 83/83 Unit Tests Passed, 7/7 Security E2E Scenarios Passed, NestJS Build Passed (Commit `fac47c2` & `5fc38de`).
+- **Active OpenCode Session Continuity ID:** `ses_f916daf73ffe9hdsCs6ri2ZzIv`
+
+---
 
 ---
 
