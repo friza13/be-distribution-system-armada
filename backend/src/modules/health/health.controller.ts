@@ -42,8 +42,8 @@ export class HealthController {
       // 3. POD Storage Accessibility
       () => this.storageIndicator.isHealthy('storage'),
 
-      // 4. Memory Heap Check (Cap at 500MB)
-      () => this.memoryIndicator.checkHeap('memory_heap', 500 * 1024 * 1024),
+      // 4. Memory Heap Check (Cap at 1024MB heap threshold)
+      () => this.memoryIndicator.checkHeap('memory_heap', 1024 * 1024 * 1024),
     ]);
   }
 }

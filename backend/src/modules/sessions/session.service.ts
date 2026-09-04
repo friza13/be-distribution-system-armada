@@ -211,7 +211,12 @@ export class SessionService {
     };
   }
 
-  async revokeSession(sessionId: string, userId?: string): Promise<void> {
+  async revokeSession(sessionId?: string, userId?: string): Promise<void> {
+    if (!sessionId) {
+      this.logger.debug('revokeSession called with empty or undefined sessionId, skipping');
+      return;
+    }
+
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
     });
@@ -240,7 +245,12 @@ export class SessionService {
     );
   }
 
-  async revokeAllUserSessions(userId: string): Promise<void> {
+  async revokeAllUserSessions(userId?: string): Promise<void> {
+    if (!userId) {
+      this.logger.debug('revokeAllUserSessions called with empty or undefined userId, skipping');
+      return;
+    }
+
     await this.prisma.session.updateMany({
       where: { userId, isRevoked: false },
       data: { isRevoked: true },

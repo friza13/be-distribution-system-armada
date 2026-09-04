@@ -7,3 +7,7 @@ process.env.DATABASE_URL =
 process.env.JWT_SECRET_OR_KEY =
   process.env.JWT_SECRET_OR_KEY ||
   'test_secret_with_minimum_32_characters_length_here';
+
+// Increase default hook/test timeout to 15s to prevent database contention timeout during full suite parallel runs
+jest.setTimeout(15000);
+

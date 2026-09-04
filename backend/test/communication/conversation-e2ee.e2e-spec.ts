@@ -66,15 +66,15 @@ describe('E2E Conversation & Message Ingestion Service (E2E)', () => {
     // 1. Owner Setup
     ownerUser = await prisma.user.create({
       data: {
-        username: `chat_own_${Date.now()}`,
-        phone: `+62818${Date.now().toString().slice(-8)}`,
+        username: `chat_own_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62818${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
         status: 'ACTIVE',
       },
     });
     ownerDevice = await prisma.device.create({
-      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     ownerSession = await prisma.session.create({
       data: { userId: ownerUser.id, deviceId: ownerDevice.id, refreshTokenHash: 'h_own', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -88,18 +88,18 @@ describe('E2E Conversation & Message Ingestion Service (E2E)', () => {
     // 2. Driver A Setup
     driverUserA = await prisma.user.create({
       data: {
-        username: `chat_drv_a_${Date.now()}`,
-        phone: `+62821${Date.now().toString().slice(-8)}`,
+        username: `chat_drv_a_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62821${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
       },
     });
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `DRV-CHT-A-${Date.now()}`, displayName: 'Driver Chat A', phone: driverUserA.phone },
+      data: { userId: driverUserA.id, employeeCode: `DRV-CHT-A-${Date.now()}-${Math.floor(Math.random() * 10000)}`, displayName: 'Driver Chat A', phone: driverUserA.phone },
     });
     driverDeviceA = await prisma.device.create({
-      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     driverSessionA = await prisma.session.create({
       data: { userId: driverUserA.id, deviceId: driverDeviceA.id, refreshTokenHash: 'h_drva', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -113,8 +113,8 @@ describe('E2E Conversation & Message Ingestion Service (E2E)', () => {
     // 3. Driver B Setup
     driverUserB = await prisma.user.create({
       data: {
-        username: `chat_drv_b_${Date.now()}`,
-        phone: `+62822${Date.now().toString().slice(-8)}`,
+        username: `chat_drv_b_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62822${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',

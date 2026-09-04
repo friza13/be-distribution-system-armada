@@ -58,15 +58,15 @@ describe('Realtime Chat Streaming & ACK Protocol (E2E)', () => {
 
     ownerUser = await prisma.user.create({
       data: {
-        username: `wschat_own_${Date.now()}`,
-        phone: `+62818${Date.now().toString().slice(-8)}`,
+        username: `wschat_own_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62818${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
         status: 'ACTIVE',
       },
     });
     ownerDevice = await prisma.device.create({
-      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     ownerSession = await prisma.session.create({
       data: { userId: ownerUser.id, deviceId: ownerDevice.id, refreshTokenHash: 'h_own', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -79,18 +79,18 @@ describe('Realtime Chat Streaming & ACK Protocol (E2E)', () => {
 
     driverUserA = await prisma.user.create({
       data: {
-        username: `wschat_drv_${Date.now()}`,
-        phone: `+62821${Date.now().toString().slice(-8)}`,
+        username: `wschat_drv_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62821${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
       },
     });
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `DRV-WSC-${Date.now()}`, displayName: 'Driver WS Chat', phone: driverUserA.phone },
+      data: { userId: driverUserA.id, employeeCode: `DRV-WSC-${Date.now()}-${Math.floor(Math.random() * 10000)}`, displayName: 'Driver WS Chat', phone: driverUserA.phone },
     });
     driverDeviceA = await prisma.device.create({
-      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     driverSessionA = await prisma.session.create({
       data: { userId: driverUserA.id, deviceId: driverDeviceA.id, refreshTokenHash: 'h_drva', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
