@@ -17,6 +17,8 @@ import { RealtimeGateway } from '../../realtime/gateways/realtime.gateway';
 import { formatRealtimeEvent } from '../../realtime/dto/realtime-envelope.dto';
 import { RealtimeSessionType, RealtimeSessionStatus } from '@prisma/client';
 
+const ACTIVE_CALL_LIFETIME_MS = 60 * 60 * 1000;
+
 export interface UserActor {
   userId: string;
   role: string;
@@ -182,6 +184,7 @@ export class CallSessionService {
       data: {
         status: newStatus,
         startedAt: action === 'ACCEPT' ? now : null,
+        ...(action === 'ACCEPT' ? { expiresAt: new Date(now.getTime() + ACTIVE_CALL_LIFETIME_MS) } : {}),
       },
     });
 

@@ -12,11 +12,11 @@ export class WsConnectionManagerService {
   // userId -> Set<socketId>
   private readonly userSockets = new Map<string, Set<string>>();
 
-  // sessionId -> socketId
-  private readonly sessionSockets = new Map<string, string>();
+  // sessionId -> socketIds
+  private readonly sessionSockets = new Map<string, Set<string>>();
 
-  // deviceId -> socketId
-  private readonly deviceSockets = new Map<string, string>();
+  // deviceId -> socketIds
+  private readonly deviceSockets = new Map<string, Set<string>>();
 
   // driverId -> socketId
   private readonly driverSockets = new Map<string, string>();
@@ -60,15 +60,9 @@ export class WsConnectionManagerService {
     }
     this.userSockets.get(userId)!.add(socketId);
 
-    // Map Session
-    if (sessionId) {
-      this.sessionSockets.set(sessionId, socketId);
-    }
-
-    // Map Device
-    if (deviceId) {
-      this.deviceSockets.set(deviceId, socketId);
-    }
+    // Map all sockets for the session and device so revocation reaches every connection.
+    this.addSocketToIndex(this.sessionSockets, sessionId, socketId);
+    this.addSocketToIndex(this.deviceSockets, deviceId, socketId);
 
     // Map Driver
     if (driverId) {
@@ -108,13 +102,8 @@ export class WsConnectionManagerService {
         }
       }
 
-      if (sessionId && this.sessionSockets.get(sessionId) === socketId) {
-        this.sessionSockets.delete(sessionId);
-      }
-
-      if (deviceId && this.deviceSockets.get(deviceId) === socketId) {
-        this.deviceSockets.delete(deviceId);
-      }
+      this.removeSocketFromIndex(this.sessionSockets, sessionId, socketId);
+      this.removeSocketFromIndex(this.deviceSockets, deviceId, socketId);
 
       if (driverId && this.driverSockets.get(driverId) === socketId) {
         this.driverSockets.delete(driverId);
@@ -145,14 +134,20 @@ export class WsConnectionManagerService {
     return result;
   }
 
+  getSocketsBySessionId(sessionId: string): Socket[] {
+    return this.getSocketsFromIndex(this.sessionSockets, sessionId);
+  }
+
   getSocketBySessionId(sessionId: string): Socket | undefined {
-    const socketId = this.sessionSockets.get(sessionId);
-    return socketId ? this.sockets.get(socketId) : undefined;
+    return this.getSocketsBySessionId(sessionId)[0];
+  }
+
+  getSocketsByDeviceId(deviceId: string): Socket[] {
+    return this.getSocketsFromIndex(this.deviceSockets, deviceId);
   }
 
   getSocketByDeviceId(deviceId: string): Socket | undefined {
-    const socketId = this.deviceSockets.get(deviceId);
-    return socketId ? this.sockets.get(socketId) : undefined;
+    return this.getSocketsByDeviceId(deviceId)[0];
   }
 
   getSocketByDriverId(driverId: string): Socket | undefined {
@@ -165,37 +160,19 @@ export class WsConnectionManagerService {
   }
 
   disconnectSession(sessionId: string, reason: string = 'SESSION_REVOKED'): boolean {
-    const socket = this.getSocketBySessionId(sessionId);
-    if (socket) {
-      this.logger.log(`Disconnecting socket ${socket.id} due to session revocation (${sessionId}): ${reason}`);
-      socket.emit('disconnect_notice', {
-        event: 'disconnect_notice',
-        reason,
-        sessionId,
-        timestamp: new Date().toISOString(),
-      });
-      socket.disconnect(true);
-      this.removeSocket(socket.id);
-      return true;
-    }
-    return false;
+    return this.disconnectSockets(
+      this.getSocketsBySessionId(sessionId),
+      reason,
+      { sessionId },
+    );
   }
 
   disconnectDevice(deviceId: string, reason: string = 'DEVICE_REVOKED'): boolean {
-    const socket = this.getSocketByDeviceId(deviceId);
-    if (socket) {
-      this.logger.log(`Disconnecting socket ${socket.id} due to device revocation (${deviceId}): ${reason}`);
-      socket.emit('disconnect_notice', {
-        event: 'disconnect_notice',
-        reason,
-        deviceId,
-        timestamp: new Date().toISOString(),
-      });
-      socket.disconnect(true);
-      this.removeSocket(socket.id);
-      return true;
-    }
-    return false;
+    return this.disconnectSockets(
+      this.getSocketsByDeviceId(deviceId),
+      reason,
+      { deviceId },
+    );
   }
 
   disconnectUser(userId: string, reason: string = 'USER_REVOKED'): number {
@@ -213,4 +190,47 @@ export class WsConnectionManagerService {
     }
     return sockets.length;
   }
+  private addSocketToIndex(index: Map<string, Set<string>>, key: string | undefined, socketId: string): void {
+    if (!key) return;
+    let socketIds = index.get(key);
+    if (!socketIds) {
+      socketIds = new Set<string>();
+      index.set(key, socketIds);
+    }
+    socketIds.add(socketId);
+  }
+
+  private removeSocketFromIndex(index: Map<string, Set<string>>, key: string | undefined, socketId: string): void {
+    if (!key) return;
+    const socketIds = index.get(key);
+    if (!socketIds) return;
+    socketIds.delete(socketId);
+    if (socketIds.size === 0) {
+      index.delete(key);
+    }
+  }
+
+  private getSocketsFromIndex(index: Map<string, Set<string>>, key: string): Socket[] {
+    const socketIds = index.get(key);
+    if (!socketIds) return [];
+    return Array.from(socketIds)
+      .map((socketId) => this.sockets.get(socketId))
+      .filter((socket): socket is Socket => Boolean(socket));
+  }
+
+  private disconnectSockets(sockets: Socket[], reason: string, details: Record<string, string>): boolean {
+    for (const socket of sockets) {
+      this.logger.log(`Disconnecting socket ${socket.id} due to revocation: ${reason}`);
+      socket.emit('disconnect_notice', {
+        event: 'disconnect_notice',
+        reason,
+        ...details,
+        timestamp: new Date().toISOString(),
+      });
+      socket.disconnect(true);
+      this.removeSocket(socket.id);
+    }
+    return sockets.length > 0;
+  }
+
 }

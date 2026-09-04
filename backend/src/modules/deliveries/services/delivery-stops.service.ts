@@ -184,6 +184,13 @@ export class DeliveryStopsService {
       actor.role === 'DRIVER' ? actor.driverId : undefined,
     );
 
+    if (actor.role === 'OWNER' && stop.delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to mutate this delivery stop',
+      });
+    }
+
     this.ensureDeliveryOperational(stop.delivery.status);
 
     if (stop.status !== 'PENDING') {

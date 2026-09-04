@@ -41,34 +41,6 @@ export class PodService {
       actor.role === 'DRIVER' ? actor.driverId : undefined,
     );
 
-    if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(stop.delivery.status)) {
-      throw new ConflictException({
-        code: 'INVALID_DELIVERY_STATE',
-        message: `Cannot submit POD while delivery is in state ${stop.delivery.status}`,
-      });
-    }
-
-    if (stop.status === 'DELIVERED') {
-      const existingPod = await this.prisma.proofOfDelivery.findUnique({
-        where: { deliveryStopId: stopId },
-      });
-      return {
-        podId: existingPod?.id,
-        deliveryStopId: stopId,
-        status: 'DELIVERED',
-        completedAt: existingPod?.completedAt || stop.completedAt,
-        alreadySubmitted: true,
-      };
-    }
-
-    if (stop.status !== 'UNLOADING' && stop.status !== 'ARRIVED') {
-      throw new ConflictException({
-        code: 'INVALID_STATE_TRANSITION',
-        message: `Cannot submit POD for stop in status ${stop.status}. Expected UNLOADING or ARRIVED`,
-      });
-    }
-
-    // Race-Safe Idempotency Check
     if (dto.idempotencyKey) {
       const existingRecord = await this.prisma.idempotencyRecord.findUnique({
         where: {
@@ -86,6 +58,33 @@ export class PodService {
           idempotent: true,
         };
       }
+    }
+
+    if (stop.status === 'DELIVERED') {
+      const existingPod = await this.prisma.proofOfDelivery.findUnique({
+        where: { deliveryStopId: stopId },
+      });
+      return {
+        podId: existingPod?.id,
+        deliveryStopId: stopId,
+        status: 'DELIVERED',
+        completedAt: existingPod?.completedAt || stop.completedAt,
+        alreadySubmitted: true,
+      };
+    }
+
+    if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(stop.delivery.status)) {
+      throw new ConflictException({
+        code: 'INVALID_DELIVERY_STATE',
+        message: `Cannot submit POD while delivery is in state ${stop.delivery.status}`,
+      });
+    }
+
+    if (stop.status !== 'UNLOADING' && stop.status !== 'ARRIVED') {
+      throw new ConflictException({
+        code: 'INVALID_STATE_TRANSITION',
+        message: `Cannot submit POD for stop in status ${stop.status}. Expected UNLOADING or ARRIVED`,
+      });
     }
 
     // Process POD creation and stop status transition inside database transaction

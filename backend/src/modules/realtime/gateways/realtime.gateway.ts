@@ -208,6 +208,24 @@ export class RealtimeGateway
     this.logger.log(`WS client disconnected: ${client.id}`);
   }
 
+  private async revalidateSensitiveSocket(client: Socket): Promise<boolean> {
+    try {
+      await this.wsJwtAuthGuard.validateSocket(client);
+      return true;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Sensitive WebSocket operation rejected for ${client.id}: ${message}`);
+      client.emit('auth_error', {
+        code: 'UNAUTHORIZED',
+        message: 'Authentication context is no longer valid',
+      });
+      this.stopHeartbeatTimers(client);
+      client.disconnect(true);
+      this.connectionManager.removeSocket(client.id);
+      return false;
+    }
+  }
+
   private startHeartbeatCycle(socket: Socket) {
     const data = socket.data as AuthenticatedSocketData;
     if (!data) return;
@@ -317,6 +335,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() body: JoinRoomDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('room_error', {
@@ -406,6 +425,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: LocationIngestionDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('location_error', {
@@ -456,6 +476,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: ChatSendWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('chat_error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
@@ -526,6 +547,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcRespondWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
@@ -558,6 +580,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcOfferWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
@@ -579,6 +602,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcAnswerWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
@@ -600,6 +624,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcIceCandidateWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
@@ -648,6 +673,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcHangupWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 

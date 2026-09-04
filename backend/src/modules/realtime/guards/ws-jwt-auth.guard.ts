@@ -214,6 +214,50 @@ export class WsJwtAuthGuard implements CanActivate {
     return socketData;
   }
 
+  async validateSocket(socket: Socket): Promise<void> {
+    const data = socket.data as AuthenticatedSocketData;
+    if (!data?.userId || !data.sessionId || !data.deviceId) {
+      throw new Error('UNAUTHORIZED: Authentication context required');
+    }
+
+    const [session, user, isSessionRevoked, isUserRevoked] = await Promise.all([
+      this.prisma.session.findUnique({
+        where: { id: data.sessionId },
+        select: {
+          userId: true,
+          deviceId: true,
+          isRevoked: true,
+          expiresAt: true,
+          device: { select: { userId: true, status: true } },
+        },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: data.userId },
+        select: { status: true, role: { select: { code: true } }, driver: { select: { id: true } } },
+      }),
+      this.redis.isRevoked(`revoked:session:${data.sessionId}`),
+      this.redis.isRevoked(`revoked:user:${data.userId}`),
+    ]);
+
+    if (
+      isSessionRevoked === true ||
+      isUserRevoked === true ||
+      !session ||
+      !user ||
+      user.status !== 'ACTIVE' ||
+      user.role.code !== data.role ||
+      session.userId !== data.userId ||
+      session.deviceId !== data.deviceId ||
+      session.device.userId !== data.userId ||
+      session.isRevoked ||
+      session.expiresAt <= new Date() ||
+      session.device.status !== 'ACTIVE' ||
+      (user.driver?.id || null) !== data.driverId
+    ) {
+      throw new Error('UNAUTHORIZED: Session or device revoked');
+    }
+  }
+
   private extractToken(socket: Socket): string | null {
     const authHeader =
       socket.handshake.auth?.token ||

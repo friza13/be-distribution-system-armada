@@ -100,3 +100,23 @@ ESLint couldn't find a configuration file.
 ```
 
 The targeted and full e2e runs also printed the repository's existing asynchronous-handle notice after completion; all suites and assertions passed. The lint command is blocked by the pre-existing missing ESLint configuration, unrelated to these changes.
+
+
+## Important issue follow-up — 2026-09-04
+
+Fixed the remaining Important review findings without changing the Prisma schema, adding a tenant migration, or modifying generated artifacts:
+
+- Owner `skipStop` mutations now require `Delivery.createdBy` to match the acting owner. Admin and super-admin operational access remains unchanged.
+- POD idempotency lookup now precedes terminal-delivery rejection, and already-delivered stops remain safe retry responses. New POD submissions against terminal deliveries still return `INVALID_DELIVERY_STATE` before any write.
+- Accepted WebRTC invites now receive a one-hour active lifetime, separate from the 30-second unanswered-invite deadline. The pending timeout remains conditional and cannot expire an accepted session.
+- Realtime revocation now indexes all sockets per session and device, disconnects every matching socket, and revalidates the database session, device, account, role, and revocation state before sensitive room, telemetry, chat, and WebRTC operations. Invalid existing sockets receive an authorization error and are disconnected.
+- Uncertain Redis revocation keys now carry a bounded 15-minute memory TTL and oldest-entry eviction at a 10,000-key cap; expired entries are pruned before reads and writes.
+
+The tenant/company schema requirement remains explicitly deferred as requested. No Prisma migration or generated artifact was introduced.
+
+### Validation
+
+- Focused regression suite: `./node_modules/.bin/jest --config ./test/jest-unit.json test/security/logic-code-fixes.spec.ts --runInBand` — 23 passed.
+- Unit suite: `npm test -- --runInBand` — 8 suites, 68 tests passed.
+- Build: `npm run build` — passed.
+- Relevant e2e: `npm run test:e2e -- --runInBand test/deliveries/pod-upload.e2e-spec.ts test/deliveries/stop-lifecycle.e2e-spec.ts test/communication/webrtc-session.e2e-spec.ts test/communication/ws-webrtc-signaling.e2e-spec.ts test/realtime/ws-instant-revocation.e2e-spec.ts test/realtime/ws-room-authorization.e2e-spec.ts` — 6 suites, 30 tests passed.

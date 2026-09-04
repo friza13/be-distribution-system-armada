@@ -1,4 +1,4 @@
-import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { JwtStrategy } from '../../src/modules/auth/strategies/jwt.strategy';
 import { SessionService } from '../../src/modules/sessions/session.service';
@@ -10,6 +10,7 @@ import { RoutesDomainService } from '../../src/modules/routes/services/routes-do
 import { WsRoomAuthorizerService } from '../../src/modules/realtime/services/ws-room-authorizer.service';
 import { RealtimeGateway } from '../../src/modules/realtime/gateways/realtime.gateway';
 import { RedisService } from '../../src/common/redis/redis.service';
+import { WsConnectionManagerService } from '../../src/modules/realtime/services/ws-connection-manager.service';
 
 describe('approved security and logic fixes', () => {
   it('creates a pending non-privileged account regardless of the requested role', async () => {
@@ -165,6 +166,89 @@ describe('approved security and logic fixes', () => {
     ).rejects.toMatchObject({ response: { code: 'INVALID_DELIVERY_STATE' } });
   });
 
+  it('scopes owner skip-stop mutations to deliveries they created', async () => {
+    const prisma = {
+      deliveryStop: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'stop-1',
+          status: 'PENDING',
+          delivery: { id: 'delivery-1', createdBy: 'owner-2', driverId: null, status: 'EN_ROUTE' },
+        }),
+        updateMany: jest.fn(),
+      },
+    };
+    const service = new DeliveryStopsService(prisma as any, { completeDeliveryIfEligible: jest.fn() } as any);
+
+    await expect(service.skipStop('stop-1', {} as any, {
+      userId: 'owner-1',
+      role: 'OWNER',
+      driverId: null,
+    })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.deliveryStop.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('returns the original POD on retry after auto-completion but rejects new terminal-delivery PODs', async () => {
+    const completedStop = {
+      id: 'stop-1',
+      deliveryId: 'delivery-1',
+      status: 'DELIVERED',
+      completedAt: new Date(),
+      delivery: { id: 'delivery-1', driverId: 'driver-1', status: 'COMPLETED' },
+    };
+    const terminalUnsubmittedStop = {
+      ...completedStop,
+      status: 'ARRIVED',
+      completedAt: null,
+    };
+    const prisma = {
+      idempotencyRecord: {
+        findUnique: jest.fn()
+          .mockResolvedValueOnce({ responseBody: { podId: 'pod-1', deliveryStopId: 'stop-1', status: 'DELIVERED' } })
+          .mockResolvedValueOnce(null),
+      },
+      proofOfDelivery: { findUnique: jest.fn().mockResolvedValue({ id: 'pod-1', completedAt: completedStop.completedAt }) },
+    };
+    const getStopAndVerifyDriver = jest.fn()
+      .mockResolvedValueOnce(completedStop)
+      .mockResolvedValueOnce(terminalUnsubmittedStop);
+    const service = new PodService(
+      prisma as any,
+      {} as any,
+      { getStopAndVerifyDriver } as any,
+      { completeDeliveryIfEligible: jest.fn() } as any,
+    );
+
+    await expect(service.submitPod('stop-1', { receiverName: 'Receiver', idempotencyKey: 'retry-key' } as any, {
+      userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1',
+    })).resolves.toMatchObject({ idempotent: true, podId: 'pod-1' });
+
+    await expect(service.submitPod('stop-1', { receiverName: 'New receiver', idempotencyKey: 'new-key' } as any, {
+      userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1',
+    })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('extends the WebRTC session lifetime when an invite is accepted', async () => {
+    const pendingExpiresAt = new Date(Date.now() + 30_000);
+    const prisma = {
+      realtimeSession: {
+        findUnique: jest.fn()
+          .mockResolvedValueOnce({ id: 'call-1', ownerId: 'owner-1', driverId: 'driver-1', status: 'PENDING', expiresAt: pendingExpiresAt })
+          .mockResolvedValueOnce({ id: 'call-1', ownerId: 'owner-1', driverId: 'driver-1', status: 'ACTIVE', expiresAt: new Date(Date.now() + 3_600_000) }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new CallSessionService(prisma as any, {} as any, {} as any);
+
+    await service.respondToCallSession('call-1', 'ACCEPT', {
+      userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1',
+    });
+
+    const update = prisma.realtimeSession.updateMany.mock.calls[0][0];
+    expect(update.data.expiresAt).toBeInstanceOf(Date);
+    expect(update.data.expiresAt.getTime()).toBeGreaterThan(pendingExpiresAt.getTime());
+  });
+
   it('rejects incomplete, duplicate, and non-contiguous route stop sets', async () => {
     const delivery = {
       id: 'delivery-1',
@@ -209,7 +293,7 @@ describe('approved security and logic fixes', () => {
     const server = { to: jest.fn().mockReturnValue({ emit: jest.fn() }) };
     const callSessionService = { authorizeSignal: jest.fn() };
     const gateway = new RealtimeGateway(
-      {} as any,
+      { validateSocket: jest.fn().mockResolvedValue(undefined) } as any,
       {} as any,
       {} as any,
       {} as any,
@@ -236,6 +320,63 @@ describe('approved security and logic fixes', () => {
     expect(callSessionService.authorizeSignal).not.toHaveBeenCalled();
     expect(client.emit).toHaveBeenCalledWith('call_error', expect.objectContaining({ code: 'SIGNALING_FAILED' }));
     expect(server.to).not.toHaveBeenCalled();
+  });
+
+  it('disconnects and rejects sensitive WebSocket operations after session revocation', async () => {
+    const server = { to: jest.fn().mockReturnValue({ emit: jest.fn() }) };
+    const client = {
+      id: 'socket-1',
+      connected: true,
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      rooms: new Set(['socket-1', 'session:call-1']),
+      data: {
+        userId: 'owner-1', role: 'OWNER', driverId: null, deviceId: 'device-1', sessionId: 'session-1',
+        joinedRooms: new Set(['session:call-1']),
+      },
+    } as any;
+    const connectionManager = { removeSocket: jest.fn() };
+    const callSessionService = { authorizeSignal: jest.fn() };
+    const gateway = new RealtimeGateway(
+      { validateSocket: jest.fn().mockRejectedValue(new Error('SESSION_REVOKED')) } as any,
+      connectionManager as any,
+      {} as any,
+      {} as any,
+      { get: jest.fn((key: string, fallback: number) => fallback) } as any,
+      {} as any, {} as any, callSessionService as any,
+    );
+    gateway.server = server as any;
+
+    await gateway.handleWebrtcSignalOffer(client, { sessionId: 'call-1', sdp: 'offer' });
+
+    expect(client.disconnect).toHaveBeenCalledWith(true);
+    expect(connectionManager.removeSocket).toHaveBeenCalledWith('socket-1');
+    expect(callSessionService.authorizeSignal).not.toHaveBeenCalled();
+    expect(server.to).not.toHaveBeenCalled();
+  });
+
+  it('disconnects every socket registered for a revoked session and device', () => {
+    const manager = new WsConnectionManagerService();
+    const makeSocket = (id: string) => ({
+      id,
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+      data: {
+        userId: 'owner-1', role: 'OWNER', sessionId: 'session-1', deviceId: 'device-1', driverId: null,
+        joinedRooms: new Set(),
+      },
+    } as any);
+    const first = makeSocket('socket-1');
+    const second = makeSocket('socket-2');
+
+    manager.registerSocket(first);
+    manager.registerSocket(second);
+    manager.disconnectSession('session-1');
+    manager.disconnectDevice('device-1');
+
+    expect(first.disconnect).toHaveBeenCalledWith(true);
+    expect(second.disconnect).toHaveBeenCalledWith(true);
+    expect(manager.getActiveConnectionCount()).toBe(0);
   });
 
   it('does not let an owner read another owner delivery', async () => {
@@ -273,6 +414,23 @@ describe('approved security and logic fixes', () => {
 
     await expect(redis.isRevoked('revoked:session:session-1')).resolves.toBeNull();
     expect(exists).not.toHaveBeenCalled();
+  });
+
+  it('bounds and prunes uncertain revocation keys', async () => {
+    const redis = new RedisService({ get: jest.fn() } as any);
+    const markUncertain = (redis as any).markRevocationUncertain.bind(redis);
+
+    for (let index = 0; index < 10_001; index += 1) {
+      markUncertain(`revoked:session:${index}`);
+    }
+
+    expect((redis as any).uncertainRevocationKeys.size).toBeLessThanOrEqual(10_000);
+
+    (redis as any).uncertainRevocationKeys.set('expired-key', Date.now() - 1);
+    (redis as any).client = { exists: jest.fn().mockResolvedValue(0) };
+    (redis as any).isConnected = true;
+    await expect(redis.isRevoked('expired-key')).resolves.toBe(false);
+    expect((redis as any).uncertainRevocationKeys.has('expired-key')).toBe(false);
   });
 
   it('allows only one concurrent delivery terminal transition to win', async () => {
@@ -409,7 +567,7 @@ describe('approved security and logic fixes', () => {
     const server = { to: jest.fn().mockReturnValue({ emit: jest.fn() }) };
     const callSessionService = { authorizeSignal: jest.fn().mockResolvedValue({}) };
     const gateway = new RealtimeGateway(
-      {} as any, {} as any, {} as any, {} as any,
+      { validateSocket: jest.fn().mockResolvedValue(undefined) } as any, {} as any, {} as any, {} as any,
       { get: jest.fn((key: string, fallback: number) => fallback) } as any,
       {} as any, {} as any, callSessionService as any,
     );
