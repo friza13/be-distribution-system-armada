@@ -30,3 +30,6 @@ backups/
 *.png
 report.*.json
 
+# Tooling artifacts
+.opencode/
+

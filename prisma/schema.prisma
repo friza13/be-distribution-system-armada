@@ -124,6 +124,42 @@ enum NotificationStatus {
   READ
 }
 
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+model Organization {
+  id        String     @id @default(uuid()) @db.Uuid
+  code      String     @unique @db.VarChar(50)
+  name      String     @db.VarChar(150)
+  status    String     @default("ACTIVE") @db.VarChar(20)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users      User[]
+  drivers    Driver[]
+  vehicles   Vehicle[]
+  deliveries Delivery[]
+
+  @@map("organizations")
+}
+
+model OutboxEvent {
+  id          String       @id @default(uuid()) @db.Uuid
+  topic       String       @db.VarChar(100)
+  payload     Json         @map("payload")
+  status      OutboxStatus @default(PENDING)
+  retryCount  Int          @default(0) @map("retry_count")
+  error       String?      @db.Text
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  publishedAt DateTime?    @map("published_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
 model Role {
   id              String           @id @default(uuid()) @db.Uuid
   code            String           @unique @db.VarChar(50)
@@ -160,12 +196,14 @@ model User {
   phone                 String              @unique @db.VarChar(20)
   passwordHash          String              @map("password_hash") @db.VarChar(255)
   roleId                String              @map("role_id") @db.Uuid
+  organizationId        String?             @map("organization_id") @db.Uuid
   status                AccountStatus       @default(PENDING_ACTIVATION)
   createdBy             String?             @map("created_by") @db.Uuid
   createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   lastLoginAt           DateTime?           @map("last_login_at") @db.Timestamptz(3)
   role                  Role                @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  organization          Organization?       @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   creator               User?               @relation("UserCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   createdUsers          User[]              @relation("UserCreator")
   driver                Driver?
@@ -184,38 +222,45 @@ model User {
   notifications         Notification[]      @relation("UserNotifications")
   idempotencyRecords    IdempotencyRecord[] @relation("UserIdempotency")
 
+  @@index([organizationId])
   @@map("users")
 }
 
 model Driver {
   id                     String                  @id @default(uuid()) @db.Uuid
   userId                 String                  @unique @map("user_id") @db.Uuid
+  organizationId         String?                 @map("organization_id") @db.Uuid
   employeeCode           String                  @unique @map("employee_code") @db.VarChar(50)
   displayName            String                  @map("display_name") @db.VarChar(100)
   phone                  String                  @db.VarChar(20)
   activeVehicleId        String?                 @map("active_vehicle_id") @db.Uuid
   operationalStatus      DriverOperationalStatus @default(OFFLINE) @map("operational_status")
   user                   User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization           Organization?           @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   assignments            VehicleAssignment[]
   deliveries             Delivery[]
   emergencies            Emergency[]
   conversations          Conversation[]          @relation("ConversationDriver")
   driverRealtimeSessions RealtimeSession[]       @relation("SessionDriver")
 
+  @@index([organizationId])
   @@map("drivers")
 }
 
 model Vehicle {
   id               String              @id @default(uuid()) @db.Uuid
+  organizationId   String?             @map("organization_id") @db.Uuid
   plateNumber      String              @unique @map("plate_number") @db.VarChar(20)
   vehicleType      VehicleType         @map("vehicle_type")
   capacityWeightKg Decimal             @map("capacity_weight_kg") @db.Decimal(10, 2)
   capacityVolumeM3 Decimal?            @map("capacity_volume_m3") @db.Decimal(10, 2)
   status           VehicleStatus       @default(ACTIVE)
   notes            String?             @db.Text
+  organization     Organization?       @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   assignments      VehicleAssignment[]
   deliveries       Delivery[]
 
+  @@index([organizationId])
   @@map("vehicles")
 }
 
@@ -305,6 +350,7 @@ model Delivery {
   deliveryCode   String             @unique @map("delivery_code") @db.VarChar(50)
   driverId       String?            @map("driver_id") @db.Uuid
   vehicleId      String?            @map("vehicle_id") @db.Uuid
+  organizationId String?            @map("organization_id") @db.Uuid
   status         DeliveryStatus     @default(DRAFT)
   routeMode      RouteMode          @default(RECOMMENDED_2OPT) @map("route_mode")
   plannedStartAt DateTime?          @map("planned_start_at") @db.Timestamptz(3)
@@ -315,6 +361,7 @@ model Delivery {
   updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   driver         Driver?            @relation(fields: [driverId], references: [id], onDelete: Restrict)
   vehicle        Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  organization   Organization?      @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   creator        User               @relation("DeliveryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   items          DeliveryItem[]
   stops          DeliveryStop[]
@@ -325,6 +372,7 @@ model Delivery {
   sessions       RealtimeSession[]
 
   @@index([driverId, status])
+  @@index([organizationId])
   @@index([createdBy])
   @@map("deliveries")
 }

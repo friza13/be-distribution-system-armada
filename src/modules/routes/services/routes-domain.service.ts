@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   UnprocessableEntityException,
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpStatus,
   Logger,
@@ -39,6 +40,17 @@ export class RoutesDomainService {
     @Inject(forwardRef(() => RealtimeGateway))
     private readonly realtimeGateway: RealtimeGateway,
   ) {}
+
+  private readonly TERMINAL_DELIVERY_STATUSES = ['COMPLETED', 'CANCELLED', 'FAILED'];
+
+  private ensureDeliveryOperational(status: string): void {
+    if (this.TERMINAL_DELIVERY_STATUSES.includes(status)) {
+      throw new ConflictException({
+        code: 'INVALID_DELIVERY_STATE',
+        message: `Cannot mutate route while delivery is in terminal state ${status}`,
+      });
+    }
+  }
 
   /**
    * Verified Delivery Ownership Guard (Anti-IDOR Defense)
@@ -107,6 +119,7 @@ export class RoutesDomainService {
     actor: RouteActor,
   ) {
     const delivery = await this.verifyDeliveryAccess(deliveryId, actor);
+    this.ensureDeliveryOperational(delivery.status);
     await this.enforceRouteRateLimit(deliveryId);
 
     if (!delivery.stops || delivery.stops.length === 0) {
@@ -160,6 +173,7 @@ export class RoutesDomainService {
     endpoint: string = '/v1/deliveries/:id/routes/select',
   ) {
     const delivery = await this.verifyDeliveryAccess(deliveryId, actor);
+    this.ensureDeliveryOperational(delivery.status);
     await this.enforceRouteRateLimit(deliveryId);
 
     // Race-Safe Idempotency Check
@@ -306,6 +320,7 @@ export class RoutesDomainService {
     endpoint: string = '/v1/deliveries/:id/routes/reorder',
   ) {
     const delivery = await this.verifyDeliveryAccess(deliveryId, actor);
+    this.ensureDeliveryOperational(delivery.status);
     await this.enforceRouteRateLimit(deliveryId);
 
     // Race-Safe Idempotency Check

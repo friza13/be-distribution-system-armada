@@ -10,6 +10,7 @@ export interface AuthenticatedSocketData {
   userId: string;
   username: string;
   role: string;
+  organizationId?: string | null;
   permissions: string[];
   deviceId: string;
   sessionId: string;
@@ -203,6 +204,7 @@ export class WsJwtAuthGuard implements CanActivate {
       userId: user.id,
       username: user.username,
       role: user.role.code,
+      organizationId: user.organizationId || null,
       permissions,
       deviceId: payload.deviceId,
       sessionId: payload.sessionId,

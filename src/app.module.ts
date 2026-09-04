@@ -19,6 +19,7 @@ import { PodModule } from './modules/pod/pod.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { CommunicationModule } from './modules/communication/communication.module';
 import { NotificationModule } from './modules/notifications/notification.module';
+import { EmergenciesModule } from './modules/emergencies/emergencies.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 @Module({
@@ -48,6 +49,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     ConversationsModule,
     CommunicationModule,
     NotificationModule,
+    EmergenciesModule,
     HealthModule,
   ],
 })

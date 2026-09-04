@@ -451,7 +451,13 @@ describe('approved security and logic fixes', () => {
       },
     } as any;
 
-    await gateway.handleWebrtcSignalOffer(client, { sessionId: 'call-1', sdp: 'offer' });
+    await gateway.handleWebrtcSignalOffer(client, {
+      sessionId: 'call-1',
+      sdp: 'offer',
+      nonce: '00000000-0000-4000-8000-000000000001',
+      seq: 1,
+      timestamp: Date.now(),
+    });
 
     expect(callSessionService.authorizeSignal).not.toHaveBeenCalled();
     expect(client.emit).toHaveBeenCalledWith('call_error', expect.objectContaining({ code: 'SIGNALING_FAILED' }));
@@ -483,7 +489,13 @@ describe('approved security and logic fixes', () => {
     );
     gateway.server = server as any;
 
-    await gateway.handleWebrtcSignalOffer(client, { sessionId: 'call-1', sdp: 'offer' });
+    await gateway.handleWebrtcSignalOffer(client, {
+      sessionId: 'call-1',
+      sdp: 'offer',
+      nonce: '00000000-0000-4000-8000-000000000001',
+      seq: 1,
+      timestamp: Date.now(),
+    });
 
     expect(client.disconnect).toHaveBeenCalledWith(true);
     expect(connectionManager.removeSocket).toHaveBeenCalledWith('socket-1');
@@ -717,7 +729,19 @@ describe('approved security and logic fixes', () => {
       },
     } as any;
 
-    await gateway.handleWebrtcSignalOffer(client, { sessionId: 'call-1', sdp: 'offer' });
+    const redis = {
+      setNxEx: jest.fn().mockResolvedValue(true),
+      verifyAndSetSequence: jest.fn().mockResolvedValue(true),
+    };
+    (gateway as any).redis = redis;
+
+    await gateway.handleWebrtcSignalOffer(client, {
+      sessionId: 'call-1',
+      sdp: 'offer',
+      nonce: '00000000-0000-4000-8000-000000000001',
+      seq: 1,
+      timestamp: Date.now(),
+    });
 
     expect(callSessionService.authorizeSignal).toHaveBeenCalled();
     expect(server.to).toHaveBeenCalledWith('session:call-1');

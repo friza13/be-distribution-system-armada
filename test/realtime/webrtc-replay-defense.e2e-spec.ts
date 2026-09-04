@@ -9,9 +9,8 @@ import { GlobalExceptionFilter } from '../../src/common/filters/global-exception
 import { TransformInterceptor } from '../../src/common/interceptors/transform.interceptor';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { hashPassword } from '../../src/common/utils/password.util';
-import { RealtimeEventEnvelope } from '../../src/modules/realtime/dto/realtime-envelope.dto';
 
-describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
+describe('WebRTC Signaling Nonce & Sequence Replay Defense (E2E)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let serverPort: number;
@@ -63,7 +62,7 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
 
     ownerUser = await prisma.user.create({
       data: {
-        username: `wssig_own_${Date.now()}`,
+        username: `webrtc_replay_own_${Date.now()}`,
         phone: `+62818${Date.now().toString().slice(-8)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
@@ -71,7 +70,7 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
       },
     });
     ownerDevice = await prisma.device.create({
-      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: ownerUser.id, deviceIdentifier: `own-rep-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     ownerSession = await prisma.session.create({
       data: { userId: ownerUser.id, deviceId: ownerDevice.id, refreshTokenHash: 'h_own', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -84,7 +83,7 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
 
     driverUserA = await prisma.user.create({
       data: {
-        username: `wssig_drv_${Date.now()}`,
+        username: `webrtc_replay_drv_${Date.now()}`,
         phone: `+62821${Date.now().toString().slice(-8)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
@@ -92,10 +91,10 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
       },
     });
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `DRV-WSS-${Date.now()}`, displayName: 'WS Signal Driver', phone: driverUserA.phone },
+      data: { userId: driverUserA.id, employeeCode: `DRV-REP-${Date.now()}`, displayName: 'WS Replay Driver', phone: driverUserA.phone },
     });
     driverDeviceA = await prisma.device.create({
-      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: driverUserA.id, deviceIdentifier: `drva-rep-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     driverSessionA = await prisma.session.create({
       data: { userId: driverUserA.id, deviceId: driverDeviceA.id, refreshTokenHash: 'h_drva', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -132,14 +131,10 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
     });
   }
 
-  it('should exchange WebRTC offer, answer, and ICE candidate signals over WebSocket after driver accepts call', async () => {
+  it('should detect duplicate nonce replay and out-of-order sequence attacks', async () => {
     const ownerClient = await connect(ownerToken);
     const driverClient = await connect(driverTokenA);
 
-    expect(ownerClient.connected).toBe(true);
-    expect(driverClient.connected).toBe(true);
-
-    // 1. Owner initiates voice call session via REST
     const initRes = await request(app.getHttpServer())
       .post('/v1/voice-sessions')
       .set('Authorization', `Bearer ${ownerToken}`)
@@ -148,7 +143,6 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
 
     const callSessionId = initRes.body.data.sessionId;
 
-    // 2. Both clients join room session:<callSessionId> for WebRTC signaling
     const joinOwner = new Promise<any>((resolve) => ownerClient.on('room_joined', (d) => resolve(d)));
     const joinDriver = new Promise<any>((resolve) => driverClient.on('room_joined', (d) => resolve(d)));
 
@@ -157,71 +151,74 @@ describe('WebRTC Realtime Signaling Gateway & Consent Gate (E2E)', () => {
 
     await Promise.all([joinOwner, joinDriver]);
 
-    // Driver responds ACCEPT via WebSocket
     driverClient.emit('webrtc.call.respond', {
       sessionId: callSessionId,
       action: 'ACCEPT',
     });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 1. Send legitimate offer with nonce and seq = 1
+    const fixedNonce = uuidv4();
+    ownerClient.emit('webrtc.signal.offer', {
+      sessionId: callSessionId,
+      sdp: 'v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=sendrecv',
+      nonce: fixedNonce,
+      seq: 1,
+      timestamp: Date.now(),
+    });
 
     await new Promise((r) => setTimeout(r, 50));
 
-    // 3. Driver receives offer relayed by Owner
-    const offerPromise = new Promise<RealtimeEventEnvelope>((resolve) => {
-      driverClient.on('webrtc.signal.offer', (event: RealtimeEventEnvelope) => {
-        resolve(event);
-      });
+    // 2. Replay the exact same payload with identical nonce -> REPLAY_DETECTED
+    const replayErrorPromise = new Promise<any>((resolve) => {
+      ownerClient.once('call_error', (err) => resolve(err));
+    });
+
+    ownerClient.emit('webrtc.signal.offer', {
+      sessionId: callSessionId,
+      sdp: 'v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=sendrecv',
+      nonce: fixedNonce,
+      seq: 2,
+      timestamp: Date.now(),
+    });
+
+    const replayErr = await replayErrorPromise;
+    expect(replayErr).toBeDefined();
+    expect(replayErr.code).toBe('REPLAY_DETECTED');
+
+    // 3. Send payload with lower or equal sequence -> OUT_OF_ORDER_SEQUENCE
+    const seqErrorPromise = new Promise<any>((resolve) => {
+      ownerClient.once('call_error', (err) => resolve(err));
     });
 
     ownerClient.emit('webrtc.signal.offer', {
       sessionId: callSessionId,
       sdp: 'v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=sendrecv',
       nonce: uuidv4(),
-      seq: 1,
+      seq: 1, // <= last seq 1
       timestamp: Date.now(),
     });
 
-    const offerEvent = await offerPromise;
-    expect(offerEvent).toBeDefined();
-    expect(offerEvent.event).toBe('webrtc.signal.offer');
-    expect((offerEvent.payload as any).sdp).toContain('v=0');
+    const seqErr = await seqErrorPromise;
+    expect(seqErr).toBeDefined();
+    expect(seqErr.code).toBe('OUT_OF_ORDER_SEQUENCE');
 
-    // 4. Owner receives answer relayed by Driver
-    const answerPromise = new Promise<RealtimeEventEnvelope>((resolve) => {
-      ownerClient.on('webrtc.signal.answer', (event: RealtimeEventEnvelope) => {
-        resolve(event);
-      });
+    // 4. Send payload with skewed timestamp (>30s) -> CLOCK_SKEW_EXCEEDED
+    const skewErrorPromise = new Promise<any>((resolve) => {
+      ownerClient.once('call_error', (err) => resolve(err));
     });
 
-    driverClient.emit('webrtc.signal.answer', {
+    ownerClient.emit('webrtc.signal.offer', {
       sessionId: callSessionId,
-      sdp: 'v=0\r\no=- 9876543210 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=recvonly',
+      sdp: 'v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=sendrecv',
       nonce: uuidv4(),
-      seq: 1,
-      timestamp: Date.now(),
+      seq: 5,
+      timestamp: Date.now() - 40000,
     });
 
-    const answerEvent = await answerPromise;
-    expect(answerEvent).toBeDefined();
-    expect(answerEvent.event).toBe('webrtc.signal.answer');
-
-    // 5. Exchange ICE Candidate
-    const icePromise = new Promise<RealtimeEventEnvelope>((resolve) => {
-      driverClient.on('webrtc.signal.ice_candidate', (event: RealtimeEventEnvelope) => {
-        resolve(event);
-      });
-    });
-
-    ownerClient.emit('webrtc.signal.ice_candidate', {
-      sessionId: callSessionId,
-      candidate: { candidate: 'candidate:1 1 UDP 2013266431 127.0.0.1 54321 typ host', sdpMid: 'audio' },
-      nonce: uuidv4(),
-      seq: 2,
-      timestamp: Date.now(),
-    });
-
-    const iceEvent = await icePromise;
-    expect(iceEvent).toBeDefined();
-    expect(iceEvent.event).toBe('webrtc.signal.ice_candidate');
+    const skewErr = await skewErrorPromise;
+    expect(skewErr).toBeDefined();
+    expect(skewErr.code).toBe('CLOCK_SKEW_EXCEEDED');
 
     ownerClient.disconnect();
     driverClient.disconnect();

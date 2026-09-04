@@ -21,7 +21,7 @@ export class FleetController {
   @Get('fleet/locations')
   @Roles('ADMIN', 'SUPER_ADMIN', 'OWNER')
   async getFleetLocations(@CurrentUser() user: any) {
-    return this.fleetService.getAllActiveDriverLocations(user.id, user.role);
+    return this.fleetService.getAllActiveDriverLocations(user.id, user.role, user.organizationId || null);
   }
 
   @Get('drivers/:id/location-history')

@@ -226,6 +226,42 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     } catch {}
   }
 
+  async setNxEx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    if (!this.client || !this.isConnected) {
+      return true; // Fail-open if Redis unavailable or handle appropriately
+    }
+    try {
+      const res = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+      return res === 'OK';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to setNxEx for ${key}: ${message}`);
+      return true;
+    }
+  }
+
+  async verifyAndSetSequence(key: string, seq: number, ttlSeconds: number = 3600): Promise<boolean> {
+    if (!this.client || !this.isConnected) {
+      return true;
+    }
+    const lua = `
+      local current = redis.call('GET', KEYS[1])
+      if current and tonumber(current) >= tonumber(ARGV[1]) then
+        return 0
+      end
+      redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+      return 1
+    `;
+    try {
+      const res = await this.client.eval(lua, 1, key, seq.toString(), ttlSeconds.toString());
+      return res === 1;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to verifyAndSetSequence for ${key}: ${message}`);
+      return true;
+    }
+  }
+
   async publish(channel: string, message: string): Promise<void> {
     if (!this.client || !this.isConnected) {
       return;

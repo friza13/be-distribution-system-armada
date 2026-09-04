@@ -62,7 +62,7 @@ export class WsRoomAuthorizerService {
     }
 
     // Role-based shortcut / verification
-    const { role, driverId, userId } = socketData;
+    const { role, driverId, userId, organizationId } = socketData;
 
     const delivery = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
@@ -70,6 +70,7 @@ export class WsRoomAuthorizerService {
         id: true,
         driverId: true,
         createdBy: true,
+        organizationId: true,
       },
     });
 
@@ -82,9 +83,11 @@ export class WsRoomAuthorizerService {
       return { authorized: true, normalizedRoom };
     }
 
-    // Until a tenant relation exists, owners are scoped to their own deliveries.
+    // Owners are scoped to their own deliveries or organization
     if (role === 'OWNER') {
-      if (delivery.createdBy === userId) {
+      const isCreator = delivery.createdBy === userId;
+      const isSameOrg = organizationId && delivery.organizationId === organizationId;
+      if (isCreator || isSameOrg) {
         return { authorized: true, normalizedRoom };
       }
       return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };

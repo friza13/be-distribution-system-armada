@@ -575,6 +575,46 @@ export class RealtimeGateway
     }
   }
 
+  private async validateWebrtcAntiReplay(
+    client: Socket,
+    sessionId: string,
+    senderId: string,
+    nonce: string,
+    seq: number,
+    timestamp: number,
+  ): Promise<boolean> {
+    const now = Date.now();
+    if (Math.abs(now - timestamp) > 30000) {
+      client.emit('call_error', {
+        code: 'CLOCK_SKEW_EXCEEDED',
+        message: 'Timestamp skew > 30s',
+      });
+      return false;
+    }
+
+    const nonceKey = `replay:nonce:${sessionId}:${nonce}`;
+    const claimed = await this.redis.setNxEx(nonceKey, '1', 60);
+    if (!claimed) {
+      client.emit('call_error', {
+        code: 'REPLAY_DETECTED',
+        message: 'Signaling nonce already used',
+      });
+      return false;
+    }
+
+    const seqKey = `seq:webrtc:${sessionId}:${senderId}`;
+    const validSeq = await this.redis.verifyAndSetSequence(seqKey, seq, 3600);
+    if (!validSeq) {
+      client.emit('call_error', {
+        code: 'OUT_OF_ORDER_SEQUENCE',
+        message: 'Out of order sequence',
+      });
+      return false;
+    }
+
+    return true;
+  }
+
   @SubscribeMessage('webrtc.signal.offer')
   async handleWebrtcSignalOffer(
     @ConnectedSocket() client: Socket,
@@ -586,9 +626,19 @@ export class RealtimeGateway
 
     try {
       await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
+      const isClean = await this.validateWebrtcAntiReplay(
+        client,
+        dto.sessionId,
+        data.userId,
+        dto.nonce,
+        dto.seq,
+        dto.timestamp,
+      );
+      if (!isClean) return;
+
       const envelope = formatRealtimeEvent(
         'webrtc.signal.offer',
-        { sessionId: dto.sessionId, sdp: dto.sdp },
+        { sessionId: dto.sessionId, sdp: dto.sdp, seq: dto.seq, nonce: dto.nonce },
         { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
       );
       this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.offer', envelope);
@@ -608,9 +658,19 @@ export class RealtimeGateway
 
     try {
       await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
+      const isClean = await this.validateWebrtcAntiReplay(
+        client,
+        dto.sessionId,
+        data.userId,
+        dto.nonce,
+        dto.seq,
+        dto.timestamp,
+      );
+      if (!isClean) return;
+
       const envelope = formatRealtimeEvent(
         'webrtc.signal.answer',
-        { sessionId: dto.sessionId, sdp: dto.sdp },
+        { sessionId: dto.sessionId, sdp: dto.sdp, seq: dto.seq, nonce: dto.nonce },
         { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
       );
       this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.answer', envelope);
@@ -630,6 +690,16 @@ export class RealtimeGateway
 
     try {
       await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
+      const isClean = await this.validateWebrtcAntiReplay(
+        client,
+        dto.sessionId,
+        data.userId,
+        dto.nonce,
+        dto.seq,
+        dto.timestamp,
+      );
+      if (!isClean) return;
+
       // ICE candidate rate limiting per session (Max 50 candidates per socket)
       const candidateCount = await this.redis.incrRateLimit(`throttle:ice:${client.id}:${dto.sessionId}`, 60);
       if (candidateCount > 50) {
@@ -639,7 +709,7 @@ export class RealtimeGateway
 
       const envelope = formatRealtimeEvent(
         'webrtc.signal.ice_candidate',
-        { sessionId: dto.sessionId, candidate: dto.candidate },
+        { sessionId: dto.sessionId, candidate: dto.candidate, seq: dto.seq, nonce: dto.nonce },
         { userId: data.userId, role: data.role, deviceId: data.deviceId, driverId: data.driverId },
       );
       this.server.to(`session:${dto.sessionId}`).emit('webrtc.signal.ice_candidate', envelope);

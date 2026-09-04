@@ -45,6 +45,7 @@ export class FleetService {
   async getAllActiveDriverLocations(
     actorUserId: string,
     actorRole: string,
+    actorOrgId: string | null = null,
   ): Promise<{ drivers: FleetDriverLocationItem[]; count: number }> {
     // 1. Role Enforcement (Only OWNER, ADMIN, SUPER_ADMIN permitted)
     if (actorRole === 'DRIVER') {
@@ -54,12 +55,18 @@ export class FleetService {
       });
     }
 
-    // 2. Fetch Active Drivers from PostgreSQL
+    // 2. Fetch Active Drivers from PostgreSQL scoped by organization
+    const whereClause: any = {
+      user: { status: 'ACTIVE' },
+      operationalStatus: { in: ['AVAILABLE', 'ON_DELIVERY', 'EMERGENCY'] },
+    };
+
+    if (actorRole !== 'SUPER_ADMIN' && actorOrgId) {
+      whereClause.organizationId = actorOrgId;
+    }
+
     const activeDrivers = await this.prisma.driver.findMany({
-      where: {
-        user: { status: 'ACTIVE' },
-        operationalStatus: { in: ['AVAILABLE', 'ON_DELIVERY', 'EMERGENCY'] },
-      },
+      where: whereClause,
       include: {
         user: { select: { id: true, username: true } },
         assignments: {

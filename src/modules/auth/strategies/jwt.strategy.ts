@@ -138,6 +138,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       id: user.id,
       username: user.username,
       role: user.role.code,
+      organizationId: user.organizationId || null,
       permissions,
       deviceId: payload.deviceId,
       sessionId: payload.sessionId,

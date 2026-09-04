@@ -22,6 +22,7 @@ export interface DeliveryActor {
   userId: string;
   role: string;
   driverId?: string | null;
+  organizationId?: string | null;
 }
 
 const TERMINAL_DELIVERY_STATUSES: DeliveryStatus[] = ['COMPLETED', 'CANCELLED', 'FAILED'];
@@ -62,11 +63,15 @@ export class DeliveriesService {
         message: 'You are not assigned to this delivery',
       });
     }
-    if (actor.role === 'OWNER' && delivery.createdBy !== actor.userId) {
-      throw new ForbiddenException({
-        code: 'RESOURCE_FORBIDDEN',
-        message: 'You are not authorized to access this delivery',
-      });
+    if (actor.role === 'OWNER') {
+      const isCreator = delivery.createdBy === actor.userId;
+      const isSameOrg = actor.organizationId && delivery.organizationId === actor.organizationId;
+      if (!isCreator && !isSameOrg) {
+        throw new ForbiddenException({
+          code: 'RESOURCE_FORBIDDEN',
+          message: 'You are not authorized to access this delivery',
+        });
+      }
     }
 
     return delivery;
