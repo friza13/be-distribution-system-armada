@@ -85,7 +85,7 @@ Through Context7 live queries, the authoritative documentation libraries were re
   - Handshake authentication uses `WsJwtAuthGuard` reading `socket.handshake.auth.token` or `socket.handshake.query.token`.
   - Room authorization is strictly isolated per tenant (`fleet:monitoring`) and per delivery (`delivery:<id>`).
 - **Documentation Discrepancy Found:** Previous project documentation occasionally described the namespace as `/realtime` rather than `/v1/realtime`.
-- **Correction:** Reconciled in `distribution-system-docs/API-ENDPOINTS.md` and `HANDOFF-FE.md`.
+- **Correction:** Reconciled in `docs/distribution-system-docs/API-ENDPOINTS.md` and `docs/distribution-system-docs/HANDOFF-FE.md`.
 - **Compatibility Status:** **VERIFIED (100% Compatible)**.
 
 ### 4.3 Prisma ORM 5.22.0 & `findUnique` Undefined Analysis

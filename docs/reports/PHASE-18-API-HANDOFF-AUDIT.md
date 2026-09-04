@@ -32,13 +32,13 @@ Phase 18 establishes the definitive canonical API documentation, Frontend & DevO
 
 ## 3. Full Deliverables Inventory
 
-1. **`distribution-system-docs/API-ENDPOINTS.md`** (Version 2.0.0):
+1. **`docs/distribution-system-docs/API-ENDPOINTS.md`** (Version 2.0.0):
    - 59 REST Routes mapped with exact runtime paths (`/v1/me/stops/*`, `/v1/e2ee/keys/*`, `/v1/deliveries/:id/routes/*`).
    - Standardized JSON envelope, rate limit tiers, idempotency matrix, and emitted realtime events.
-2. **`distribution-system-docs/HANDOFF-FE.md`**:
+2. **`docs/distribution-system-docs/HANDOFF-FE.md`**:
    - Complete frontend handoff guide for Admin Web, Owner Mobile, and Driver Mobile teams.
    - Includes internal `# FE API NOTICE` section (DOs & DON'Ts, CSRF cookie handling, state transitions, GPS bounds).
-3. **`distribution-system-docs/HANDOFF-INFRA-DEVOPS.md`**:
+3. **`docs/distribution-system-docs/HANDOFF-INFRA-DEVOPS.md`**:
    - Complete infrastructure handoff guide (multi-stage Dockerfile, docker-compose.prod.yml, Terminus health probes, Nginx reverse proxy, and AES-256 backup pipeline).
 
 ---

@@ -95,6 +95,15 @@ flowchart TB
   RTC[Realtime/Media] --> MEDIA[STUN/TURN/Media]
 ```
 
+### Repository Organization (Polyrepo Architecture)
+The overall Distribution Management System is developed under a **Polyrepo (Multi-Repository)** strategy:
+- **Backend Service (This Repository):** Standalone NestJS Modular Monolith API and Realtime Gateway.
+- **Admin Web Client:** Standalone browser SPA repository consuming REST and WebSocket contracts.
+- **Owner Mobile Client:** Standalone Flutter mobile repository consuming REST and WebSocket contracts.
+- **Driver Mobile Client:** Standalone Flutter mobile repository consuming REST and WebSocket contracts.
+
+Client applications consume backend contracts (OpenAPI 3.0 and WebSocket definitions) and are decoupled from backend source code.
+
 ## 3. Recommended modular backend
 
 For the first production-capable version, use a **modular monolith** rather than many microservices. Keep modules separated in code and contracts:

@@ -20,9 +20,9 @@ Laporan ini disusun untuk menyajikan hasil audit ulang (*re-audit*) komprehensif
 Seluruh evaluasi dilakukan terhadap dokumen spesifikasi dan arsitektur master berikut:
 
 1. **`TASK_BREAKDOWN_BE_SECURITY.md`** (Master Baseline Breakdown 19 Phases, 73 Tasks)
-2. **`distribution-system-docs/00-README.md`** s/d **`11-TECHNOLOGY-STACK-INFRASTRUCTURE.md`**
-3. **`distribution-system-docs/api/*`** (Seluruh API Living Contracts: Auth, Delivery, Fleet, Telemetry, Routes, POD, Chat, WebRTC, Conflicts, Notifications, Health)
-4. **`distribution-system-docs/openapi/openapi.yaml`** (OpenAPI 3.0 Specification)
+2. **`docs/distribution-system-docs/00-README.md`** s/d **`11-TECHNOLOGY-STACK-INFRASTRUCTURE.md`**
+3. **`docs/distribution-system-docs/api/*`** (Seluruh API Living Contracts: Auth, Delivery, Fleet, Telemetry, Routes, POD, Chat, WebRTC, Conflicts, Notifications, Health)
+4. **`docs/distribution-system-docs/openapi/openapi.yaml`** (OpenAPI 3.0 Specification)
 5. **`docs/adr/*`** (ADR-001 s/d ADR-007)
 6. **`docs/reports/*`** (Laporan implementasi lama Phase 0 - 8)
 

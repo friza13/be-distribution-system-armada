@@ -24,3 +24,9 @@ storage/
 .idea/
 .vscode/
 *.swp
+
+# Playwright MCP artifacts & browser sessions
+.playwright-mcp/
+*.png
+report.*.json
+

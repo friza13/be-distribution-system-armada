@@ -163,8 +163,8 @@ Below is the audited runtime inventory of all 55 REST endpoints enumerated direc
 ---
 
 ## 4. Documentation Hierarchy & Source of Truth
-1. `distribution-system-docs/API-ENDPOINTS.md` $\rightarrow$ Canonical REST Endpoint Index & Manual Testing Guide
-2. `distribution-system-docs/openapi/openapi.yaml` $\rightarrow$ Machine-Readable OpenAPI 3.0 Contract
-3. `distribution-system-docs/api/*` $\rightarrow$ Domain-Specific Detailed Specifications
-4. `distribution-system-docs/06-API-REALTIME.md` $\rightarrow$ WebSocket & Media Realtime Contract
+1. `docs/distribution-system-docs/API-ENDPOINTS.md` $\rightarrow$ Canonical REST Endpoint Index & Manual Testing Guide
+2. `docs/distribution-system-docs/openapi/openapi.yaml` $\rightarrow$ Machine-Readable OpenAPI 3.0 Contract
+3. `docs/distribution-system-docs/api/*` $\rightarrow$ Domain-Specific Detailed Specifications
+4. `docs/distribution-system-docs/06-API-REALTIME.md` $\rightarrow$ WebSocket & Media Realtime Contract
 5. **Runtime NestJS Codebase (`backend/src/`)** $\rightarrow$ Absolute Final Source of Truth

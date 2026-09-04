@@ -6,10 +6,10 @@ Dokumentasi ini mendefinisikan sistem distribusi internal perusahaan yang menghu
 
 Platform:
 
-- **Owner Mobile App** — monitoring armada, delivery management, route, komunikasi, dan laporan.
-- **Driver Mobile App** — menjalankan delivery, menerima/menentukan route, mengirim GPS dari smartphone, proof of delivery, dan komunikasi.
-- **Admin Web** — administrasi user, kendaraan, konfigurasi, audit, security, dan tindakan tingkat sistem.
-- **Backend/API** — pusat authentication, authorization, delivery, tracking, realtime, messaging, routing, audit, notification, dan integration.
+- **Owner Mobile App** — monitoring armada, delivery management, route, komunikasi, dan laporan (Repository Terpisah).
+- **Driver Mobile App** — menjalankan delivery, menerima/menentukan route, mengirim GPS dari smartphone, proof of delivery, dan komunikasi (Repository Terpisah).
+- **Admin Web** — administrasi user, kendaraan, konfigurasi, audit, security, dan tindakan tingkat sistem (Repository Terpisah).
+- **Backend/API** — pusat authentication, authorization, delivery, tracking, realtime, messaging, routing, audit, notification, dan integration (Repository Ini - Arsitektur Polyrepo).
 
 ## 2. Prinsip arsitektur utama
 

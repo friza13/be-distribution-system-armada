@@ -13,7 +13,7 @@
 ### IMPORTANT GOVERNANCE & INTEGRATION RULES FOR FRONTEND DEVELOPERS
 
 #### DO
-- **Canonical API Reference:** Always use [`distribution-system-docs/API-ENDPOINTS.md`](API-ENDPOINTS.md) as the primary index for REST endpoints, HTTP methods, paths, and status codes.
+- **Canonical API Reference:** Always use [`docs/distribution-system-docs/API-ENDPOINTS.md`](API-ENDPOINTS.md) as the primary index for REST endpoints, HTTP methods, paths, and status codes.
 - **Correct Path Prefixes:** Note exact runtime paths:
   - Driver stop actions: `/v1/me/stops/:id/depart`, `/v1/me/stops/:id/arrive`, `/v1/me/stops/:id/unload`, `/v1/me/stops/:id/fail`, `/v1/me/stops/:id/pod`
   - Delivery routes: `/v1/deliveries/:id/routes/recommend`, `/v1/deliveries/:id/routes/select`, `/v1/deliveries/:id/routes/reorder`
@@ -60,7 +60,7 @@ The backend is constructed as a **Modular Monolith in NestJS 10 (TypeScript)** w
 │ ├── RBAC & Object-Level Authorization (Anti-IDOR Engine)                               │
 │ ├── Delivery & Stop State Machine + Transactional Outbox                               │
 │ ├── Routing (2-Opt TSP Heuristic + OSRM Adapter) & GPS Ingestion (Haversine Filter)   │
-│ ├── Socket.IO Realtime Gateway (/realtime) + Redis Revocation Bridge                   │
+│ ├── Socket.IO Realtime Gateway (/v1/realtime) + Redis Revocation Bridge                 │
 │ ├── E2EE Signal Protocol Chat Relay + WebRTC PTT/Video Signaling (RFC 7635 TURN)       │
 │ └── Private POD Storage & Terminus Health Observability                                │
 └────────────────────────────────────────────────────────────────────────────────────────┘
@@ -70,7 +70,7 @@ The backend is constructed as a **Modular Monolith in NestJS 10 (TypeScript)** w
 
 ## 2. API Integration Summary by Domain
 
-Refer to [`distribution-system-docs/API-ENDPOINTS.md`](API-ENDPOINTS.md) for full specifications:
+Refer to [`docs/distribution-system-docs/API-ENDPOINTS.md`](API-ENDPOINTS.md) for full specifications:
 - **Auth:** `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/csrf`
 - **Deliveries:** `POST /v1/deliveries`, `GET /v1/deliveries/:id`, `POST /v1/deliveries/:id/assign`, `POST /v1/deliveries/:id/accept`, `POST /v1/deliveries/:id/start`, `POST /v1/deliveries/:id/complete`
 - **Stops:** `POST /v1/me/stops/:id/depart`, `POST /v1/me/stops/:id/arrive`, `POST /v1/me/stops/:id/unload`, `POST /v1/me/stops/:id/fail`, `POST /v1/me/stops/:id/skip`

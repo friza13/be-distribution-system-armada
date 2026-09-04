@@ -1352,12 +1352,12 @@ Pengamanan transport autentikasi browser Admin Web tidak mengandalkan satu heade
 
 #### `MVP-GATE-001`: OpenAPI / API Contract & Documentation Final Reconciliation
 - **Tujuan:** Menyelaraskan seluruh dokumentasi API (OpenAPI/Swagger) dengan implementasi aktual codebase sebelum rilis.
-- **Deskripsi:** Generate OpenAPI Specification 3.0 via `@nestjs/swagger` yang mencakup seluruh endpoint, parameter request, DTO response, error codes, dan security schemes (Bearer JWT & Session Cookie). Melakukan audit rekonsiliasi antara isi dokumen `distribution-system-docs/` dengan realitas kode backend; mencatat dan memperbarui perbedaan baseline menjadi dokumentasi final yang presisi.
+- **Deskripsi:** Generate OpenAPI Specification 3.0 via `@nestjs/swagger` yang mencakup seluruh endpoint, parameter request, DTO response, error codes, dan security schemes (Bearer JWT & Session Cookie). Melakukan audit rekonsiliasi antara isi dokumen `docs/distribution-system-docs/` dengan realitas kode backend; mencatat dan memperbarui perbedaan baseline menjadi dokumentasi final yang presisi.
 - **Priority:** P0
 - **Estimasi:** 2 Hari (Audit: 6h, Update: 8h, Review: 2h)
 - **Dependensi:** All Previous Phases
 - **Fase:** Phase 18
-- **Status Audited:** ✅ CLOSED & VERIFIED (Location: `distribution-system-docs/API-ENDPOINTS.md` [59 routes], `distribution-system-docs/HANDOFF-FE.md`, `distribution-system-docs/HANDOFF-INFRA-DEVOPS.md`, `distribution-system-docs/openapi/openapi.yaml`)
+- **Status Audited:** ✅ CLOSED & VERIFIED (Location: `docs/distribution-system-docs/API-ENDPOINTS.md` [59 routes], `docs/distribution-system-docs/HANDOFF-FE.md`, `docs/distribution-system-docs/HANDOFF-INFRA-DEVOPS.md`, `docs/distribution-system-docs/openapi/openapi.yaml`)
 - **Test Evidence:** `scripts/api-smoke-test.sh` (40/40 cases PASS), `test/full-core-mvp-journey.e2e-spec.ts` (PASS), `npm run build` (Exit code 0)
 - **Output:** Swagger UI aktif (`/v1/docs`), canonical API master reference `API-ENDPOINTS.md`, file handoff `HANDOFF-FE.md`, file handoff `HANDOFF-INFRA-DEVOPS.md`.
 - **Definition of Done:** Canonical documentation `API-ENDPOINTS.md` mencerminkan 100% (59 routes) yang aktif; tidak ada perbedaan tipe data atau status code antara dokumentasi dan implementasi nyata; FE API Notice dan Infra Handoff terlampir lengkap.
