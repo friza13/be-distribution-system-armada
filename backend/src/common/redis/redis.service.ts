@@ -12,6 +12,9 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private isConnected = false;
   private isSubConnected = false;
   private readonly messageHandlers = new Map<string, Set<RedisMessageHandler>>();
+  private readonly uncertainRevocationKeys = new Map<string, number>();
+  private readonly maxUncertainRevocationKeys = 10_000;
+  private readonly uncertainRevocationTtlMs = 15 * 60 * 1000;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -150,27 +153,52 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async isRevoked(key: string): Promise<boolean> {
-    if (!this.client || !this.isConnected) {
-      return false;
+  async isRevoked(key: string): Promise<boolean | null> {
+    this.pruneUncertainRevocationKeys();
+    if (this.uncertainRevocationKeys.has(key) || !this.client || !this.isConnected) {
+      return null;
     }
     try {
       const exists = await this.client.exists(key);
       return exists === 1;
     } catch {
-      return false;
+      this.markRevocationUncertain(key);
+      return null;
     }
   }
 
   async setRevocation(key: string, ttlSeconds: number = 900): Promise<void> {
+    this.pruneUncertainRevocationKeys();
     if (!this.client || !this.isConnected) {
+      this.markRevocationUncertain(key);
       return;
     }
     try {
       await this.client.set(key, 'revoked', 'EX', ttlSeconds);
+      this.uncertainRevocationKeys.delete(key);
     } catch (err: unknown) {
+      this.markRevocationUncertain(key);
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Failed to set Redis revocation for ${key}: ${message}`);
+    }
+  }
+
+  private markRevocationUncertain(key: string): void {
+    this.pruneUncertainRevocationKeys();
+    if (!this.uncertainRevocationKeys.has(key) && this.uncertainRevocationKeys.size >= this.maxUncertainRevocationKeys) {
+      const oldestKey = this.uncertainRevocationKeys.keys().next().value as string | undefined;
+      if (oldestKey) {
+        this.uncertainRevocationKeys.delete(oldestKey);
+      }
+    }
+    this.uncertainRevocationKeys.set(key, Date.now() + this.uncertainRevocationTtlMs);
+  }
+
+  private pruneUncertainRevocationKeys(now = Date.now()): void {
+    for (const [key, expiresAt] of this.uncertainRevocationKeys) {
+      if (expiresAt <= now) {
+        this.uncertainRevocationKeys.delete(key);
+      }
     }
   }
 

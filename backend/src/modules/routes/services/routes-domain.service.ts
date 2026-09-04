@@ -59,17 +59,21 @@ export class RoutesDomainService {
       });
     }
 
-    // Role-based IDOR Defense
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || delivery.driverId !== actor.driverId) {
-        this.logger.warn(
-          `Anti-IDOR rejection: Driver ${actor.driverId || actor.userId} attempted to access delivery ${deliveryId} assigned to driver ${delivery.driverId}`,
-        );
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not assigned to this delivery',
-        });
-      }
+    // Role-based object authorization.
+    if (actor.role === 'DRIVER' && (!actor.driverId || delivery.driverId !== actor.driverId)) {
+      this.logger.warn(
+        `Anti-IDOR rejection: Driver ${actor.driverId || actor.userId} attempted to access delivery ${deliveryId} assigned to driver ${delivery.driverId}`,
+      );
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not assigned to this delivery',
+      });
+    }
+    if (actor.role === 'OWNER' && delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to access this delivery',
+      });
     }
 
     return delivery;
@@ -188,72 +192,102 @@ export class RoutesDomainService {
         });
       }
     }
+    this.validateCompleteStopSet(delivery.stops, dto.recommendedSequence);
 
-    // Execute Transaction: Fetch max version, insert new Route and RouteStops
-    const routeResult = await this.prisma.$transaction(async (tx: any) => {
-      const maxRoute = await tx.route.findFirst({
-        where: { deliveryId },
-        orderBy: { version: 'desc' },
-        select: { version: true },
-      });
+    let routeResult: any;
+    try {
+      routeResult = await this.prisma.$transaction(async (tx: any) => {
+        await this.lockRouteMutation(tx, deliveryId);
 
-      const newVersion = (maxRoute?.version || 0) + 1;
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.create({
+            data: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+              responseStatus: 0,
+              responseBody: { pending: true },
+              expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            },
+          });
+        }
 
-      const newRoute = await tx.route.create({
-        data: {
-          deliveryId,
-          version: newVersion,
-          source: dto.source,
-          totalDistanceM: dto.totalDistanceMeters,
-          estimatedDurationS: dto.estimatedDurationSeconds,
-          selectedAt: new Date(),
-        },
-      });
+        const maxRoute = await tx.route.findFirst({
+          where: { deliveryId },
+          orderBy: { version: 'desc' },
+          select: { version: true },
+        });
+        const newVersion = (maxRoute?.version || 0) + 1;
 
-      // Insert RouteStops
-      const routeStopsData = dto.recommendedSequence.map((stopId, idx) => ({
-        routeId: newRoute.id,
-        deliveryStopId: stopId,
-        sequence: idx + 1,
-      }));
-
-      await tx.routeStop.createMany({
-        data: routeStopsData,
-      });
-
-      // Update Delivery routeMode
-      await tx.delivery.update({
-        where: { id: deliveryId },
-        data: { routeMode: dto.source === 'MANUAL' ? 'MANUAL' : 'RECOMMENDED_2OPT' },
-      });
-
-      return {
-        routeId: newRoute.id,
-        deliveryId: newRoute.deliveryId,
-        version: newRoute.version,
-        source: newRoute.source,
-        selectedAt: newRoute.selectedAt,
-      };
-    });
-
-    // Save Idempotency Record if key provided
-    if (dto.idempotencyKey) {
-      try {
-        await this.prisma.idempotencyRecord.create({
+        const newRoute = await tx.route.create({
           data: {
-            key: dto.idempotencyKey,
-            userId: actor.userId,
-            endpoint,
-            responseStatus: 201,
-            responseBody: routeResult as unknown as Prisma.InputJsonValue,
-            expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            deliveryId,
+            version: newVersion,
+            source: dto.source,
+            totalDistanceM: dto.totalDistanceMeters,
+            estimatedDurationS: dto.estimatedDurationSeconds,
+            selectedAt: new Date(),
           },
         });
-      } catch (err: unknown) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          this.logger.debug(`Idempotency race collision caught for route select key ${dto.idempotencyKey}`);
+
+        await tx.routeStop.createMany({
+          data: dto.recommendedSequence.map((stopId, idx) => ({
+            routeId: newRoute.id,
+            deliveryStopId: stopId,
+            sequence: idx + 1,
+          })),
+        });
+
+        await tx.delivery.update({
+          where: { id: deliveryId },
+          data: { routeMode: dto.source === 'MANUAL' ? 'MANUAL' : 'RECOMMENDED_2OPT' },
+        });
+
+        const result = {
+          routeId: newRoute.id,
+          deliveryId: newRoute.deliveryId,
+          version: newRoute.version,
+          source: newRoute.source,
+          selectedAt: newRoute.selectedAt,
+        };
+
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.update({
+            where: {
+              key_userId_endpoint: {
+                key: dto.idempotencyKey,
+                userId: actor.userId,
+                endpoint,
+              },
+            },
+            data: {
+              responseStatus: 201,
+              responseBody: result as Prisma.InputJsonValue,
+            },
+          });
+        }
+
+        return result;
+      });
+    } catch (err: unknown) {
+      if (dto.idempotencyKey && this.isUniqueConstraintError(err)) {
+        const existing = await this.prisma.idempotencyRecord.findUnique({
+          where: {
+            key_userId_endpoint: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+            },
+          },
+        });
+        if (existing) {
+          return {
+            ...(existing.responseBody as any),
+            idempotent: true,
+          };
         }
       }
+      throw err;
     }
 
     // Realtime Broadcast to room 'delivery:<deliveryId>'
@@ -303,85 +337,119 @@ export class RoutesDomainService {
         });
       }
     }
+    this.validateCompleteStopSet(
+      delivery.stops,
+      dto.stopSequence.map((item) => item.deliveryStopId),
+      dto.stopSequence.map((item) => item.sequence),
+    );
 
-    const reorderResult = await this.prisma.$transaction(async (tx: any) => {
-      // 1. First pass: Set temporary negative sequences to prevent @@unique([deliveryId, sequence]) collision
-      for (const item of dto.stopSequence) {
-        await tx.deliveryStop.update({
-          where: { id: item.deliveryStopId },
-          data: { sequence: -item.sequence },
+    let reorderResult: any;
+    try {
+      reorderResult = await this.prisma.$transaction(async (tx: any) => {
+        await this.lockRouteMutation(tx, deliveryId);
+
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.create({
+            data: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+              responseStatus: 0,
+              responseBody: { pending: true },
+              expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            },
+          });
+        }
+
+        for (const item of dto.stopSequence) {
+          await tx.deliveryStop.update({
+            where: { id: item.deliveryStopId },
+            data: { sequence: -item.sequence },
+          });
+        }
+        for (const item of dto.stopSequence) {
+          await tx.deliveryStop.update({
+            where: { id: item.deliveryStopId },
+            data: { sequence: item.sequence },
+          });
+        }
+
+        const maxRoute = await tx.route.findFirst({
+          where: { deliveryId },
+          orderBy: { version: 'desc' },
+          select: { version: true },
         });
-      }
+        const newVersion = (maxRoute?.version || 0) + 1;
 
-      // Second pass: Set target sequence
-      for (const item of dto.stopSequence) {
-        await tx.deliveryStop.update({
-          where: { id: item.deliveryStopId },
-          data: { sequence: item.sequence },
-        });
-      }
-
-      // 2. Create new Route version with source = MANUAL
-      const maxRoute = await tx.route.findFirst({
-        where: { deliveryId },
-        orderBy: { version: 'desc' },
-        select: { version: true },
-      });
-
-      const newVersion = (maxRoute?.version || 0) + 1;
-
-      const newRoute = await tx.route.create({
-        data: {
-          deliveryId,
-          version: newVersion,
-          source: 'MANUAL',
-          totalDistanceM: 0, // Recalculated if geometry fetched
-          estimatedDurationS: 0,
-          selectedAt: new Date(),
-        },
-      });
-
-      // 3. Create RouteStops
-      const routeStopsData = dto.stopSequence.map((item) => ({
-        routeId: newRoute.id,
-        deliveryStopId: item.deliveryStopId,
-        sequence: item.sequence,
-      }));
-
-      await tx.routeStop.createMany({ data: routeStopsData });
-
-      // 4. Set delivery routeMode = MANUAL
-      await tx.delivery.update({
-        where: { id: deliveryId },
-        data: { routeMode: 'MANUAL' },
-      });
-
-      return {
-        routeId: newRoute.id,
-        deliveryId,
-        version: newRoute.version,
-        source: newRoute.source,
-        updatedAt: newRoute.selectedAt,
-      };
-    });
-
-    if (dto.idempotencyKey) {
-      try {
-        await this.prisma.idempotencyRecord.create({
+        const newRoute = await tx.route.create({
           data: {
-            key: dto.idempotencyKey,
-            userId: actor.userId,
-            endpoint,
-            responseStatus: 200,
-            responseBody: reorderResult as unknown as Prisma.InputJsonValue,
-            expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            deliveryId,
+            version: newVersion,
+            source: 'MANUAL',
+            totalDistanceM: 0,
+            estimatedDurationS: 0,
+            selectedAt: new Date(),
           },
         });
-      } catch (err: unknown) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          this.logger.debug(`Idempotency collision caught for reorder key ${dto.idempotencyKey}`);
+
+        await tx.routeStop.createMany({
+          data: dto.stopSequence.map((item) => ({
+            routeId: newRoute.id,
+            deliveryStopId: item.deliveryStopId,
+            sequence: item.sequence,
+          })),
+        });
+
+        await tx.delivery.update({
+          where: { id: deliveryId },
+          data: { routeMode: 'MANUAL' },
+        });
+
+        const result = {
+          routeId: newRoute.id,
+          deliveryId,
+          version: newRoute.version,
+          source: newRoute.source,
+          updatedAt: newRoute.selectedAt,
+        };
+
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.update({
+            where: {
+              key_userId_endpoint: {
+                key: dto.idempotencyKey,
+                userId: actor.userId,
+                endpoint,
+              },
+            },
+            data: {
+              responseStatus: 200,
+              responseBody: result as Prisma.InputJsonValue,
+            },
+          });
+        }
+
+        return result;
+      });
+    } catch (err: unknown) {
+      if (dto.idempotencyKey && this.isUniqueConstraintError(err)) {
+        const existing = await this.prisma.idempotencyRecord.findUnique({
+          where: {
+            key_userId_endpoint: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+            },
+          },
+        });
+        if (existing) {
+          return {
+            ...(existing.responseBody as any),
+            idempotent: true,
+          };
         }
       }
+      throw err;
     }
 
     this.broadcastRouteUpdated(deliveryId, reorderResult, actor);
@@ -473,6 +541,47 @@ export class RoutesDomainService {
         selectedAt: r.selectedAt,
       })),
     };
+  }
+
+  private async lockRouteMutation(tx: any, deliveryId: string): Promise<void> {
+    await tx.$executeRaw`SELECT id FROM deliveries WHERE id = ${deliveryId}::uuid FOR UPDATE`;
+  }
+
+  private isUniqueConstraintError(err: unknown): boolean {
+    return err instanceof Prisma.PrismaClientKnownRequestError ||
+      (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002');
+  }
+
+  private validateCompleteStopSet(
+    deliveryStops: Array<{ id: string }>,
+    submittedStopIds: string[],
+    submittedSequences?: number[],
+  ): void {
+    const expectedIds = new Set(deliveryStops.map((stop) => stop.id));
+    const submittedIds = new Set(submittedStopIds);
+    const hasExactIds =
+      expectedIds.size > 0 &&
+      submittedStopIds.length === expectedIds.size &&
+      submittedIds.size === expectedIds.size &&
+      submittedStopIds.every((stopId) => expectedIds.has(stopId));
+
+    if (!hasExactIds) {
+      throw new UnprocessableEntityException({
+        code: 'INVALID_STOP_SET',
+        message: 'Route must contain every delivery stop exactly once',
+      });
+    }
+
+    if (submittedSequences) {
+      const sortedSequences = [...submittedSequences].sort((a, b) => a - b);
+      const contiguous = sortedSequences.every((sequence, index) => sequence === index + 1);
+      if (!contiguous) {
+        throw new UnprocessableEntityException({
+          code: 'INVALID_STOP_SEQUENCE',
+          message: 'Route stop sequences must be unique and contiguous from 1 to N',
+        });
+      }
+    }
   }
 
   private broadcastRouteUpdated(deliveryId: string, routeResult: any, actor: RouteActor) {

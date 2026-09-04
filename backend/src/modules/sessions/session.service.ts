@@ -8,6 +8,12 @@ import { RedisService } from '../../common/redis/redis.service';
 import { hashToken, generateSecureToken } from '../../common/utils/token.util';
 import { v4 as uuidv4 } from 'uuid';
 
+class RefreshTokenReuseError extends Error {
+  constructor(readonly session: any) {
+    super('Refresh token reuse detected');
+  }
+}
+
 export interface SessionResult {
   sessionId: string;
   tokenFamily: string;
@@ -117,98 +123,107 @@ export class SessionService {
 
   async rotateSession(rawRefreshToken: string): Promise<SessionResult> {
     const hashed = hashToken(rawRefreshToken);
-    const existingSession = await this.prisma.session.findFirst({
-      where: { refreshTokenHash: hashed },
-      include: { user: { include: { role: true } } },
-    });
 
-    if (!existingSession) {
-      throw new UnauthorizedException({
-        code: 'INVALID_REFRESH_TOKEN',
-        message: 'Invalid or expired refresh token',
-      });
-    }
+    try {
+      return await this.prisma.$transaction(async (tx: any) => {
+        const existingSession = await tx.session.findFirst({
+          where: { refreshTokenHash: hashed },
+          include: { user: { include: { role: true } } },
+        });
 
-    // REUSE DETECTION: If session is already revoked, revoke entire token family!
-    if (existingSession.isRevoked || existingSession.expiresAt < new Date()) {
-      this.logger.warn(
-        `Token reuse detected for user ${existingSession.userId}, family: ${existingSession.tokenFamily}`,
-      );
+        if (!existingSession) {
+          throw new UnauthorizedException({
+            code: 'INVALID_REFRESH_TOKEN',
+            message: 'Invalid or expired refresh token',
+          });
+        }
 
-      // Invalidate entire token family in DB
-      await this.prisma.session.updateMany({
-        where: { tokenFamily: existingSession.tokenFamily },
-        data: { isRevoked: true },
-      });
+        if (existingSession.isRevoked || existingSession.expiresAt <= new Date()) {
+          throw new RefreshTokenReuseError(existingSession);
+        }
 
-      // Write Redis revocation keys
-      await this.redis.setRevocation(`revoked:session:${existingSession.id}`, 900);
-      await this.redis.setRevocation(`revoked:user:${existingSession.userId}`, 900);
+        const newRawRefreshToken = generateSecureToken(32);
+        const newRefreshTokenHash = hashToken(newRawRefreshToken);
+        const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-      // Publish Realtime revocation event
-      await this.redis.publish(
-        'security:revocation',
-        JSON.stringify({
-          type: 'USER_REVOKED',
-          userId: existingSession.userId,
-          sessionId: existingSession.id,
-          reason: 'TOKEN_REUSE_DETECTED',
-          timestamp: new Date().toISOString(),
-        }),
-      );
+        // Compare-and-set prevents two concurrent requests from rotating the same row.
+        const claimed = await tx.session.updateMany({
+          where: { id: existingSession.id, isRevoked: false },
+          data: { isRevoked: true, lastRefreshedAt: new Date() },
+        });
 
-      // Record Audit Alert
-      await this.prisma.auditLog.create({
-        data: {
-          actorUserId: existingSession.userId,
-          action: 'TOKEN_REUSE_DETECTED',
-          entityType: 'SESSION',
-          entityId: existingSession.id,
-          result: 'FAILED',
-          afterJson: {
+        if (claimed.count !== 1) {
+          throw new RefreshTokenReuseError(existingSession);
+        }
+
+        const newSession = await tx.session.create({
+          data: {
+            userId: existingSession.userId,
+            deviceId: existingSession.deviceId,
+            refreshTokenHash: newRefreshTokenHash,
             tokenFamily: existingSession.tokenFamily,
-            revokedAt: new Date().toISOString(),
+            isRevoked: false,
+            expiresAt: newExpiresAt,
           },
-        },
-      });
+        });
 
-      throw new UnauthorizedException({
-        code: 'TOKEN_REUSE_DETECTED',
-        message: 'Refresh token reuse detected. All sessions in family have been revoked.',
+        return {
+          sessionId: newSession.id,
+          tokenFamily: newSession.tokenFamily,
+          rawRefreshToken: newRawRefreshToken,
+          deviceId: newSession.deviceId,
+          userId: newSession.userId,
+        };
       });
+    } catch (err: unknown) {
+      if (err instanceof RefreshTokenReuseError) {
+        await this.revokeTokenFamily(err.session);
+        throw new UnauthorizedException({
+          code: 'TOKEN_REUSE_DETECTED',
+          message: 'Refresh token reuse detected. All sessions in family have been revoked.',
+        });
+      }
+      throw err;
     }
+  }
 
-    // Normal Single-use Rotation
-    const newRawRefreshToken = generateSecureToken(32);
-    const newRefreshTokenHash = hashToken(newRawRefreshToken);
-    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  private async revokeTokenFamily(session: any): Promise<void> {
+    this.logger.warn(
+      `Token reuse detected for user ${session.userId}, family: ${session.tokenFamily}`,
+    );
 
-    // Invalidate old session in DB & Redis
-    await this.prisma.session.update({
-      where: { id: existingSession.id },
+    await this.prisma.session.updateMany({
+      where: { tokenFamily: session.tokenFamily },
       data: { isRevoked: true },
     });
-    await this.redis.setRevocation(`revoked:session:${existingSession.id}`, 900);
 
-    // Create new session preserving the same token family
-    const newSession = await this.prisma.session.create({
+    await this.redis.setRevocation(`revoked:session:${session.id}`, 900);
+    await this.redis.setRevocation(`revoked:user:${session.userId}`, 900);
+
+    await this.redis.publish(
+      'security:revocation',
+      JSON.stringify({
+        type: 'USER_REVOKED',
+        userId: session.userId,
+        sessionId: session.id,
+        reason: 'TOKEN_REUSE_DETECTED',
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    await this.prisma.auditLog.create({
       data: {
-        userId: existingSession.userId,
-        deviceId: existingSession.deviceId,
-        refreshTokenHash: newRefreshTokenHash,
-        tokenFamily: existingSession.tokenFamily,
-        isRevoked: false,
-        expiresAt: newExpiresAt,
+        actorUserId: session.userId,
+        action: 'TOKEN_REUSE_DETECTED',
+        entityType: 'SESSION',
+        entityId: session.id,
+        result: 'FAILED',
+        afterJson: {
+          tokenFamily: session.tokenFamily,
+          revokedAt: new Date().toISOString(),
+        },
       },
     });
-
-    return {
-      sessionId: newSession.id,
-      tokenFamily: newSession.tokenFamily,
-      rawRefreshToken: newRawRefreshToken,
-      deviceId: newSession.deviceId,
-      userId: newSession.userId,
-    };
   }
 
   async revokeSession(sessionId?: string, userId?: string): Promise<void> {

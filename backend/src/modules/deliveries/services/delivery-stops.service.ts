@@ -11,9 +11,11 @@ import {
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { DeliveriesService, DeliveryActor } from './deliveries.service';
 import { FailStopDto, SkipStopDto } from '../dto/stop-status.dto';
-import { StopStatus } from '@prisma/client';
+import { DeliveryStatus, StopStatus } from '@prisma/client';
 import { RealtimeGateway } from '../../realtime/gateways/realtime.gateway';
 import { formatRealtimeEvent } from '../../realtime/dto/realtime-envelope.dto';
+
+const TERMINAL_DELIVERY_STATUSES: DeliveryStatus[] = ['COMPLETED', 'CANCELLED', 'FAILED'];
 
 @Injectable()
 export class DeliveryStopsService {
@@ -68,10 +70,7 @@ export class DeliveryStopsService {
       });
     }
 
-    const updated = await this.prisma.deliveryStop.update({
-      where: { id: stopId },
-      data: { status: 'EN_ROUTE' },
-    });
+    const updated = await this.updateStopIfOperational(stopId, 'PENDING', { status: 'EN_ROUTE' });
 
     this.broadcastStopStatusChanged(stop.deliveryId, stopId, 'EN_ROUTE', {
       userId: actorUserId,
@@ -99,12 +98,9 @@ export class DeliveryStopsService {
       });
     }
 
-    const updated = await this.prisma.deliveryStop.update({
-      where: { id: stopId },
-      data: {
-        status: 'ARRIVED',
-        arrivedAt: new Date(),
-      },
+    const updated = await this.updateStopIfOperational(stopId, { in: ['EN_ROUTE', 'PENDING'] }, {
+      status: 'ARRIVED',
+      arrivedAt: new Date(),
     });
 
     this.broadcastStopStatusChanged(stop.deliveryId, stopId, 'ARRIVED', {
@@ -119,6 +115,8 @@ export class DeliveryStopsService {
   async startUnloading(stopId: string, actorDriverId: string, actorUserId: string) {
     const stop = await this.getStopAndVerifyDriver(stopId, actorDriverId);
 
+    this.ensureDeliveryOperational(stop.delivery.status);
+
     if (stop.status !== 'ARRIVED') {
       throw new ConflictException({
         code: 'INVALID_STATE_TRANSITION',
@@ -126,10 +124,7 @@ export class DeliveryStopsService {
       });
     }
 
-    const updated = await this.prisma.deliveryStop.update({
-      where: { id: stopId },
-      data: { status: 'UNLOADING' },
-    });
+    const updated = await this.updateStopIfOperational(stopId, 'ARRIVED', { status: 'UNLOADING' });
 
     this.broadcastStopStatusChanged(stop.deliveryId, stopId, 'UNLOADING', {
       userId: actorUserId,
@@ -143,6 +138,8 @@ export class DeliveryStopsService {
   async failStop(stopId: string, dto: FailStopDto, actorDriverId: string, actorUserId: string) {
     const stop = await this.getStopAndVerifyDriver(stopId, actorDriverId);
 
+    this.ensureDeliveryOperational(stop.delivery.status);
+
     if (stop.status !== 'ARRIVED' && stop.status !== 'UNLOADING' && stop.status !== 'EN_ROUTE') {
       throw new ConflictException({
         code: 'INVALID_STATE_TRANSITION',
@@ -150,12 +147,9 @@ export class DeliveryStopsService {
       });
     }
 
-    const updated = await this.prisma.deliveryStop.update({
-      where: { id: stopId },
-      data: {
-        status: 'FAILED',
-        completedAt: new Date(),
-      },
+    const updated = await this.updateStopIfOperational(stopId, { in: ['ARRIVED', 'UNLOADING', 'EN_ROUTE'] }, {
+      status: 'FAILED',
+      completedAt: new Date(),
     });
 
     await this.prisma.deliveryEvent.create({
@@ -190,6 +184,15 @@ export class DeliveryStopsService {
       actor.role === 'DRIVER' ? actor.driverId : undefined,
     );
 
+    if (actor.role === 'OWNER' && stop.delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to mutate this delivery stop',
+      });
+    }
+
+    this.ensureDeliveryOperational(stop.delivery.status);
+
     if (stop.status !== 'PENDING') {
       throw new ConflictException({
         code: 'INVALID_STATE_TRANSITION',
@@ -197,10 +200,7 @@ export class DeliveryStopsService {
       });
     }
 
-    const updated = await this.prisma.deliveryStop.update({
-      where: { id: stopId },
-      data: { status: 'SKIPPED' },
-    });
+    const updated = await this.updateStopIfOperational(stopId, 'PENDING', { status: 'SKIPPED' });
 
     await this.prisma.deliveryEvent.create({
       data: {
@@ -218,6 +218,45 @@ export class DeliveryStopsService {
     await this.deliveriesService.completeDeliveryIfEligible(stop.deliveryId, actor);
 
     return updated;
+  }
+
+  private ensureDeliveryOperational(status: DeliveryStatus): void {
+    if (TERMINAL_DELIVERY_STATUSES.includes(status)) {
+      throw new ConflictException({
+        code: 'INVALID_DELIVERY_STATE',
+        message: `Cannot mutate stop while delivery is in state ${status}`,
+      });
+    }
+  }
+
+  private async updateStopIfOperational(stopId: string, expectedStatus: any, data: any) {
+    const result = await this.prisma.deliveryStop.updateMany({
+      where: {
+        id: stopId,
+        status: expectedStatus,
+        delivery: { status: { notIn: TERMINAL_DELIVERY_STATUSES } },
+      },
+      data,
+    });
+
+    if (result.count !== 1) {
+      const current = await this.prisma.deliveryStop.findUnique({
+        where: { id: stopId },
+        include: { delivery: true },
+      });
+      if (current?.delivery && TERMINAL_DELIVERY_STATUSES.includes(current.delivery.status)) {
+        throw new ConflictException({
+          code: 'INVALID_DELIVERY_STATE',
+          message: `Cannot mutate stop while delivery is in state ${current.delivery.status}`,
+        });
+      }
+      throw new ConflictException({
+        code: 'INVALID_STATE_TRANSITION',
+        message: `Cannot mutate stop ${stopId} from its current state`,
+      });
+    }
+
+    return this.prisma.deliveryStop.findUnique({ where: { id: stopId }, include: { delivery: true } });
   }
 
   private broadcastStopStatusChanged(

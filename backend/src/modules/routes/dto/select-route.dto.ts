@@ -2,6 +2,7 @@ import {
   IsNotEmpty,
   IsEnum,
   IsArray,
+  ArrayMinSize,
   IsUUID,
   IsNumber,
   Min,
@@ -15,6 +16,7 @@ export class SelectRouteDto {
   source: RouteSource;
 
   @IsArray({ message: 'Recommended sequence must be an array of deliveryStopIds' })
+  @ArrayMinSize(1, { message: 'Recommended sequence must contain at least 1 stop' })
   @IsUUID('4', { each: true, message: 'Each stop ID in sequence must be a valid UUID' })
   recommendedSequence: string[];
 

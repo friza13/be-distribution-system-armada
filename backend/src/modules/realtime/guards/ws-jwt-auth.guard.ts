@@ -13,6 +13,7 @@ export interface AuthenticatedSocketData {
   permissions: string[];
   deviceId: string;
   sessionId: string;
+  accessTokenExp: number;
   driverId: string | null;
   connectedAt: Date;
   joinedRooms: Set<string>;
@@ -125,22 +126,15 @@ export class WsJwtAuthGuard implements CanActivate {
       throw new Error('UNAUTHORIZED: Invalid token type');
     }
 
-    if (!payload.sessionId || !payload.sub || !payload.deviceId) {
+    if (!payload.sessionId || !payload.sub || !payload.deviceId || !Number.isFinite(payload.exp)) {
       throw new Error('UNAUTHORIZED: Incomplete token claims');
     }
 
     const isSessionRevoked = await this.redis.isRevoked(
       `revoked:session:${payload.sessionId}`,
     );
-    if (isSessionRevoked) {
+    if (isSessionRevoked === true) {
       throw new Error('UNAUTHORIZED: Session revoked');
-    }
-
-    const isUserRevoked = await this.redis.isRevoked(
-      `revoked:user:${payload.sub}`,
-    );
-    if (isUserRevoked) {
-      throw new Error('UNAUTHORIZED: User revoked');
     }
 
     const user = await this.prisma.user.findUnique({
@@ -171,6 +165,38 @@ export class WsJwtAuthGuard implements CanActivate {
       throw new Error('UNAUTHORIZED: ROLE_UPDATED_REAUTH_REQUIRED');
     }
 
+    if (isSessionRevoked === false || isSessionRevoked === null) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: payload.sessionId },
+        select: {
+          userId: true,
+          deviceId: true,
+          isRevoked: true,
+          expiresAt: true,
+          device: { select: { userId: true, status: true } },
+        },
+      });
+
+      if (
+        !session ||
+        session.userId !== payload.sub ||
+        session.deviceId !== payload.deviceId ||
+        session.device.userId !== payload.sub ||
+        session.isRevoked ||
+        session.expiresAt <= new Date() ||
+        session.device.status !== 'ACTIVE'
+      ) {
+        throw new Error('UNAUTHORIZED: Session revoked');
+      }
+    }
+
+    const isUserRevoked = await this.redis.isRevoked(
+      `revoked:user:${payload.sub}`,
+    );
+    if (isUserRevoked === true) {
+      throw new Error('UNAUTHORIZED: User revoked');
+    }
+
     const permissions = user.role.rolePermissions.map((rp) => rp.permission.code);
 
     const socketData: AuthenticatedSocketData = {
@@ -180,6 +206,7 @@ export class WsJwtAuthGuard implements CanActivate {
       permissions,
       deviceId: payload.deviceId,
       sessionId: payload.sessionId,
+      accessTokenExp: payload.exp,
       driverId: user.driver?.id || null,
       connectedAt: new Date(),
       joinedRooms: new Set<string>(),
@@ -187,6 +214,54 @@ export class WsJwtAuthGuard implements CanActivate {
 
     socket.data = socketData;
     return socketData;
+  }
+
+  async validateSocket(socket: Socket): Promise<void> {
+    const data = socket.data as AuthenticatedSocketData;
+    if (!data?.userId || !data.sessionId || !data.deviceId) {
+      throw new Error('UNAUTHORIZED: Authentication context required');
+    }
+
+    if (!Number.isFinite(data.accessTokenExp) || data.accessTokenExp <= Math.floor(Date.now() / 1000)) {
+      throw new Error('UNAUTHORIZED: Access token expired');
+    }
+
+    const [session, user, isSessionRevoked, isUserRevoked] = await Promise.all([
+      this.prisma.session.findUnique({
+        where: { id: data.sessionId },
+        select: {
+          userId: true,
+          deviceId: true,
+          isRevoked: true,
+          expiresAt: true,
+          device: { select: { userId: true, status: true } },
+        },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: data.userId },
+        select: { status: true, role: { select: { code: true } }, driver: { select: { id: true } } },
+      }),
+      this.redis.isRevoked(`revoked:session:${data.sessionId}`),
+      this.redis.isRevoked(`revoked:user:${data.userId}`),
+    ]);
+
+    if (
+      isSessionRevoked === true ||
+      isUserRevoked === true ||
+      !session ||
+      !user ||
+      user.status !== 'ACTIVE' ||
+      user.role.code !== data.role ||
+      session.userId !== data.userId ||
+      session.deviceId !== data.deviceId ||
+      session.device.userId !== data.userId ||
+      session.isRevoked ||
+      session.expiresAt <= new Date() ||
+      session.device.status !== 'ACTIVE' ||
+      (user.driver?.id || null) !== data.driverId
+    ) {
+      throw new Error('UNAUTHORIZED: Session or device revoked');
+    }
   }
 
   private extractToken(socket: Socket): string | null {

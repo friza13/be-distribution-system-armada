@@ -41,27 +41,6 @@ export class PodService {
       actor.role === 'DRIVER' ? actor.driverId : undefined,
     );
 
-    if (stop.status === 'DELIVERED') {
-      const existingPod = await this.prisma.proofOfDelivery.findUnique({
-        where: { deliveryStopId: stopId },
-      });
-      return {
-        podId: existingPod?.id,
-        deliveryStopId: stopId,
-        status: 'DELIVERED',
-        completedAt: existingPod?.completedAt || stop.completedAt,
-        alreadySubmitted: true,
-      };
-    }
-
-    if (stop.status !== 'UNLOADING' && stop.status !== 'ARRIVED') {
-      throw new ConflictException({
-        code: 'INVALID_STATE_TRANSITION',
-        message: `Cannot submit POD for stop in status ${stop.status}. Expected UNLOADING or ARRIVED`,
-      });
-    }
-
-    // Race-Safe Idempotency Check
     if (dto.idempotencyKey) {
       const existingRecord = await this.prisma.idempotencyRecord.findUnique({
         where: {
@@ -81,67 +60,135 @@ export class PodService {
       }
     }
 
-    // Process POD creation and stop status transition inside database transaction
-    const podResult = await this.prisma.$transaction(async (tx: any) => {
-      // 1. Create ProofOfDelivery record
-      const pod = await tx.proofOfDelivery.create({
-        data: {
-          deliveryStopId: stopId,
-          receiverName: dto.receiverName,
-          photoFileId: dto.photoFileId || null,
-          signatureFileId: dto.signatureFileId || null,
-          notes: dto.notes || null,
-          completedAt: new Date(),
-          createdBy: actor.userId,
-        },
+    if (stop.status === 'DELIVERED') {
+      const existingPod = await this.prisma.proofOfDelivery.findUnique({
+        where: { deliveryStopId: stopId },
       });
-
-      // 2. Update DeliveryStop status to DELIVERED
-      await tx.deliveryStop.update({
-        where: { id: stopId },
-        data: {
-          status: 'DELIVERED',
-          completedAt: new Date(),
-        },
-      });
-
-      // 3. Log DeliveryEvent
-      await tx.deliveryEvent.create({
-        data: {
-          deliveryId: stop.deliveryId,
-          stopId,
-          eventType: 'POD_SUBMITTED',
-          actorUserId: actor.userId,
-          metadataJson: { podId: pod.id, receiverName: dto.receiverName },
-        },
-      });
-
       return {
-        podId: pod.id,
+        podId: existingPod?.id,
         deliveryStopId: stopId,
         status: 'DELIVERED',
-        completedAt: pod.completedAt,
+        completedAt: existingPod?.completedAt || stop.completedAt,
+        alreadySubmitted: true,
       };
-    });
+    }
 
-    // Save Idempotency Record if key provided
-    if (dto.idempotencyKey) {
-      try {
-        await this.prisma.idempotencyRecord.create({
+    if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(stop.delivery.status)) {
+      throw new ConflictException({
+        code: 'INVALID_DELIVERY_STATE',
+        message: `Cannot submit POD while delivery is in state ${stop.delivery.status}`,
+      });
+    }
+
+    if (stop.status !== 'UNLOADING' && stop.status !== 'ARRIVED') {
+      throw new ConflictException({
+        code: 'INVALID_STATE_TRANSITION',
+        message: `Cannot submit POD for stop in status ${stop.status}. Expected UNLOADING or ARRIVED`,
+      });
+    }
+
+    // Claim idempotency and process POD creation in one database transaction.
+    let podResult: any;
+    try {
+      podResult = await this.prisma.$transaction(async (tx: any) => {
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.create({
+            data: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+              responseStatus: 0,
+              responseBody: { pending: true },
+              expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            },
+          });
+        }
+
+        // Claim the stop only while its parent delivery is operational.
+        const claimed = await tx.deliveryStop.updateMany({
+          where: {
+            id: stopId,
+            status: { in: ['UNLOADING', 'ARRIVED'] },
+            delivery: { status: { notIn: ['COMPLETED', 'CANCELLED', 'FAILED'] } },
+          },
+          data: { status: 'DELIVERED', completedAt: new Date() },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException({
+            code: 'INVALID_DELIVERY_STATE',
+            message: 'Cannot submit POD after the delivery has become terminal',
+          });
+        }
+
+        // Create ProofOfDelivery record after claiming the stop.
+        const pod = await tx.proofOfDelivery.create({
           data: {
-            key: dto.idempotencyKey,
-            userId: actor.userId,
-            endpoint,
-            responseStatus: 201,
-            responseBody: podResult as unknown as Prisma.InputJsonValue,
-            expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            deliveryStopId: stopId,
+            receiverName: dto.receiverName,
+            photoFileId: dto.photoFileId || null,
+            signatureFileId: dto.signatureFileId || null,
+            notes: dto.notes || null,
+            completedAt: new Date(),
+            createdBy: actor.userId,
           },
         });
-      } catch (err: unknown) {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          this.logger.debug(`Idempotency collision caught for POD submit key ${dto.idempotencyKey}`);
+
+        // Log DeliveryEvent
+        await tx.deliveryEvent.create({
+          data: {
+            deliveryId: stop.deliveryId,
+            stopId,
+            eventType: 'POD_SUBMITTED',
+            actorUserId: actor.userId,
+            metadataJson: { podId: pod.id, receiverName: dto.receiverName },
+          },
+        });
+
+        const result = {
+          podId: pod.id,
+          deliveryStopId: stopId,
+          status: 'DELIVERED',
+          completedAt: pod.completedAt,
+        };
+
+        if (dto.idempotencyKey) {
+          await tx.idempotencyRecord.update({
+            where: {
+              key_userId_endpoint: {
+                key: dto.idempotencyKey,
+                userId: actor.userId,
+                endpoint,
+              },
+            },
+            data: {
+              responseStatus: 201,
+              responseBody: result as Prisma.InputJsonValue,
+            },
+          });
+        }
+
+        return result;
+      });
+    } catch (err: unknown) {
+      if (dto.idempotencyKey && this.isUniqueConstraintError(err)) {
+        const existingRecord = await this.prisma.idempotencyRecord.findUnique({
+          where: {
+            key_userId_endpoint: {
+              key: dto.idempotencyKey,
+              userId: actor.userId,
+              endpoint,
+            },
+          },
+        });
+
+        if (existingRecord) {
+          return {
+            ...(existingRecord.responseBody as any),
+            idempotent: true,
+          };
         }
       }
+      throw err;
     }
 
     // Broadcast realtime event 'delivery.pod.created' and 'delivery.stop.status_changed'
@@ -179,6 +226,11 @@ export class PodService {
         completedAt: p.completedAt,
       })),
     };
+  }
+
+  private isUniqueConstraintError(err: unknown): boolean {
+    return (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') ||
+      (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002');
   }
 
   private broadcastPodCreated(deliveryId: string, stopId: string, podResult: any, actor: DeliveryActor) {

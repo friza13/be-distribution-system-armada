@@ -17,6 +17,8 @@ import { RealtimeGateway } from '../../realtime/gateways/realtime.gateway';
 import { formatRealtimeEvent } from '../../realtime/dto/realtime-envelope.dto';
 import { RealtimeSessionType, RealtimeSessionStatus } from '@prisma/client';
 
+const ACTIVE_CALL_LIFETIME_MS = 60 * 60 * 1000;
+
 export interface UserActor {
   userId: string;
   role: string;
@@ -57,6 +59,25 @@ export class CallSessionService {
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
+    }
+
+    if (actor.role === 'OWNER' && dto.deliveryId) {
+      const delivery = await this.prisma.delivery.findUnique({
+        where: { id: dto.deliveryId },
+        select: { createdBy: true, driverId: true },
+      });
+      if (!delivery || delivery.createdBy !== actor.userId) {
+        throw new ForbiddenException({
+          code: 'RESOURCE_FORBIDDEN',
+          message: 'You are not authorized to initiate a call for this delivery',
+        });
+      }
+      if (delivery.driverId !== dto.driverId) {
+        throw new ConflictException({
+          code: 'DRIVER_DELIVERY_MISMATCH',
+          message: 'Call driver must be assigned to the requested delivery',
+        });
+      }
     }
 
     const driver = await this.prisma.driver.findUnique({
@@ -131,14 +152,19 @@ export class CallSessionService {
       });
     }
 
-    // IDOR Check: Callee Driver verification
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || session.driverId !== actor.driverId) {
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not the designated recipient for this call session',
-        });
-      }
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
+      });
+    }
+
+    const now = new Date();
+    if (session.expiresAt <= now) {
+      throw new ConflictException({
+        code: 'CALL_SESSION_EXPIRED',
+        message: 'Call session has expired',
+      });
     }
 
     if (session.status !== 'PENDING') {
@@ -149,15 +175,34 @@ export class CallSessionService {
     }
 
     const newStatus: RealtimeSessionStatus = action === 'ACCEPT' ? 'ACTIVE' : 'DECLINED';
-    const now = new Date();
-
-    const updated = await this.prisma.realtimeSession.update({
-      where: { id: sessionId },
+    const claimed = await this.prisma.realtimeSession.updateMany({
+      where: {
+        id: sessionId,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
       data: {
         status: newStatus,
         startedAt: action === 'ACCEPT' ? now : null,
+        ...(action === 'ACCEPT' ? { expiresAt: new Date(now.getTime() + ACTIVE_CALL_LIFETIME_MS) } : {}),
       },
     });
+
+    if (claimed.count !== 1) {
+      const current = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
+      if (current && current.expiresAt <= new Date()) {
+        throw new ConflictException({
+          code: 'CALL_SESSION_EXPIRED',
+          message: 'Call session has expired',
+        });
+      }
+      throw new ConflictException({
+        code: 'INVALID_CALL_STATE',
+        message: `Cannot respond to call in status ${current?.status || session.status}. Expected PENDING`,
+      });
+    }
+
+    const updated = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
 
     await this.prisma.auditLog.create({
       data: {
@@ -184,6 +229,13 @@ export class CallSessionService {
       throw new NotFoundException({
         code: 'CALL_SESSION_NOT_FOUND',
         message: `Call session ${sessionId} not found`,
+      });
+    }
+
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
       });
     }
 
@@ -214,17 +266,59 @@ export class CallSessionService {
     return updated;
   }
 
+  async authorizeSignal(sessionId: string, actor: UserActor) {
+    const session = await this.prisma.realtimeSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException({
+        code: 'CALL_SESSION_NOT_FOUND',
+        message: `Call session ${sessionId} not found`,
+      });
+    }
+
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
+      });
+    }
+
+    if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) {
+      throw new ConflictException({
+        code: 'INVALID_CALL_STATE',
+        message: `Cannot signal call in status ${session.status}`,
+      });
+    }
+
+    return session;
+  }
+
+  private isAuthorizedParticipant(session: { ownerId: string; driverId: string }, actor: UserActor): boolean {
+    if (actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN') {
+      return true;
+    }
+    return session.ownerId === actor.userId || (!!actor.driverId && session.driverId === actor.driverId);
+  }
+
   private async handlePendingTimeout(sessionId: string) {
     try {
       const session = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
       if (session && session.status === 'PENDING') {
-        await this.prisma.realtimeSession.update({
-          where: { id: sessionId },
+        const claimed = await this.prisma.realtimeSession.updateMany({
+          where: {
+            id: sessionId,
+            status: 'PENDING',
+            expiresAt: { lte: new Date() },
+          },
           data: { status: 'TIMEOUT' },
         });
 
-        this.logger.log(`Call session ${sessionId} timed out after 30s unanswered`);
-        this.broadcastCallEnded(sessionId, 'TIMEOUT', { userId: session.ownerId, role: 'SYSTEM' });
+        if (claimed.count === 1) {
+          this.logger.log(`Call session ${sessionId} timed out after 30s unanswered`);
+          this.broadcastCallEnded(sessionId, 'TIMEOUT', { userId: session.ownerId, role: 'SYSTEM' });
+        }
       }
     } catch (err: unknown) {
       this.logger.warn(`Failed to process call timeout for ${sessionId}: ${err}`);

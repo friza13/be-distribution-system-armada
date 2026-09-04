@@ -8,7 +8,7 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { WsJwtAuthGuard, AuthenticatedSocketData } from '../guards/ws-jwt-auth.guard';
@@ -208,6 +208,24 @@ export class RealtimeGateway
     this.logger.log(`WS client disconnected: ${client.id}`);
   }
 
+  private async revalidateSensitiveSocket(client: Socket): Promise<boolean> {
+    try {
+      await this.wsJwtAuthGuard.validateSocket(client);
+      return true;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Sensitive WebSocket operation rejected for ${client.id}: ${message}`);
+      client.emit('auth_error', {
+        code: 'UNAUTHORIZED',
+        message: 'Authentication context is no longer valid',
+      });
+      this.stopHeartbeatTimers(client);
+      client.disconnect(true);
+      this.connectionManager.removeSocket(client.id);
+      return false;
+    }
+  }
+
   private startHeartbeatCycle(socket: Socket) {
     const data = socket.data as AuthenticatedSocketData;
     if (!data) return;
@@ -317,6 +335,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() body: JoinRoomDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('room_error', {
@@ -406,6 +425,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: LocationIngestionDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('location_error', {
@@ -456,6 +476,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: ChatSendWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) {
       client.emit('chat_error', { code: 'UNAUTHENTICATED', message: 'Authentication required' });
@@ -526,6 +547,7 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcRespondWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
@@ -538,7 +560,7 @@ export class RealtimeGateway
 
       // Join socket to session room upon acceptance
       if (dto.action === 'ACCEPT') {
-        client.join(`session:${dto.sessionId}`);
+        await client.join(`session:${dto.sessionId}`);
         data.joinedRooms.add(`session:${dto.sessionId}`);
       }
     } catch (err: unknown) {
@@ -558,10 +580,12 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcOfferWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       const envelope = formatRealtimeEvent(
         'webrtc.signal.offer',
         { sessionId: dto.sessionId, sdp: dto.sdp },
@@ -578,10 +602,12 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcAnswerWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       const envelope = formatRealtimeEvent(
         'webrtc.signal.answer',
         { sessionId: dto.sessionId, sdp: dto.sdp },
@@ -598,10 +624,12 @@ export class RealtimeGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcIceCandidateWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       // ICE candidate rate limiting per session (Max 50 candidates per socket)
       const candidateCount = await this.redis.incrRateLimit(`throttle:ice:${client.id}:${dto.sessionId}`, 60);
       if (candidateCount > 50) {
@@ -620,11 +648,32 @@ export class RealtimeGateway
     }
   }
 
+  private async assertWebrtcSignalAccess(
+    client: Socket,
+    data: AuthenticatedSocketData,
+    sessionId: string,
+  ): Promise<void> {
+    if (!client.rooms.has(`session:${sessionId}`)) {
+      throw new ForbiddenException({
+        code: 'ROOM_ACCESS_DENIED',
+        message: 'Join the call session room before sending signaling messages',
+      });
+    }
+
+    await this.callSessionService.authorizeSignal(sessionId, {
+      userId: data.userId,
+      role: data.role,
+      driverId: data.driverId,
+      deviceId: data.deviceId,
+    });
+  }
+
   @SubscribeMessage('webrtc.call.hangup')
   async handleWebrtcCallHangup(
     @ConnectedSocket() client: Socket,
     @MessageBody() dto: WebrtcHangupWsDto,
   ): Promise<void> {
+    if (!(await this.revalidateSensitiveSocket(client))) return;
     const data = client.data as AuthenticatedSocketData;
     if (!data || !data.userId) return;
 

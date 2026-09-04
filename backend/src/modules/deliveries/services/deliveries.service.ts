@@ -24,6 +24,8 @@ export interface DeliveryActor {
   driverId?: string | null;
 }
 
+const TERMINAL_DELIVERY_STATUSES: DeliveryStatus[] = ['COMPLETED', 'CANCELLED', 'FAILED'];
+
 @Injectable()
 export class DeliveriesService {
   private readonly logger = new Logger(DeliveriesService.name);
@@ -53,14 +55,18 @@ export class DeliveriesService {
       });
     }
 
-    // Object-level IDOR check for Driver
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || delivery.driverId !== actor.driverId) {
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not assigned to this delivery',
-        });
-      }
+    // Object-level ownership checks for both assigned drivers and owners.
+    if (actor.role === 'DRIVER' && (!actor.driverId || delivery.driverId !== actor.driverId)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not assigned to this delivery',
+      });
+    }
+    if (actor.role === 'OWNER' && delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to access this delivery',
+      });
     }
 
     return delivery;
@@ -139,13 +145,7 @@ export class DeliveriesService {
   }
 
   async assignDelivery(deliveryId: string, dto: AssignDeliveryDto, actor: DeliveryActor) {
-    const delivery = await this.prisma.delivery.findUnique({
-      where: { id: deliveryId },
-    });
-
-    if (!delivery) {
-      throw new NotFoundException({ code: 'DELIVERY_NOT_FOUND', message: 'Delivery not found' });
-    }
+    const delivery = await this.getDeliveryById(deliveryId, actor);
 
     if (delivery.status !== 'DRAFT' && delivery.status !== 'ASSIGNED') {
       throw new ConflictException({
@@ -292,65 +292,79 @@ export class DeliveriesService {
       });
     }
 
-    const isEligible = await this.evaluateDeliveryCompletion(deliveryId);
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const isEligible = await this.evaluateDeliveryCompletion(deliveryId, tx);
 
-    if (!isEligible.completed) {
-      throw new ConflictException({
-        code: 'UNFINISHED_STOPS_REMAIN',
-        message: 'Cannot complete delivery: unfinished or active stops remain',
-        unfinishedStops: isEligible.unfinishedStops,
+      if (!isEligible.completed) {
+        throw new ConflictException({
+          code: 'UNFINISHED_STOPS_REMAIN',
+          message: 'Cannot complete delivery: unfinished or active stops remain',
+          unfinishedStops: isEligible.unfinishedStops,
+        });
+      }
+
+      const finalStatus = isEligible.targetStatus || 'COMPLETED';
+      const claimed = await tx.delivery.updateMany({
+        where: { id: deliveryId, status: 'EN_ROUTE' },
+        data: { status: finalStatus, completedAt: new Date() },
       });
-    }
 
-    const finalStatus = isEligible.targetStatus || 'COMPLETED';
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: 'INVALID_STATE_TRANSITION',
+          message: 'Delivery state changed before completion could be recorded',
+        });
+      }
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
-      data: {
-        status: finalStatus,
-        completedAt: new Date(),
-      },
+      const result = await tx.delivery.findUnique({ where: { id: deliveryId } });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.userId,
+          action: finalStatus === 'COMPLETED' ? 'DELIVERY_COMPLETED' : 'DELIVERY_FAILED',
+          entityType: 'DELIVERY',
+          entityId: deliveryId,
+          result: 'SUCCESS',
+        },
+      });
+      return result;
     });
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorUserId: actor.userId,
-        action: finalStatus === 'COMPLETED' ? 'DELIVERY_COMPLETED' : 'DELIVERY_FAILED',
-        entityType: 'DELIVERY',
-        entityId: deliveryId,
-        result: 'SUCCESS',
-      },
-    });
-
-    this.broadcastStatusChanged(deliveryId, finalStatus, actor);
+    this.broadcastStatusChanged(deliveryId, updated.status, actor);
 
     return updated;
   }
 
   async cancelDelivery(deliveryId: string, dto: CancelDeliveryDto, actor: DeliveryActor) {
-    const delivery = await this.getDeliveryById(deliveryId, actor);
+    await this.getDeliveryById(deliveryId, actor);
 
-    if (delivery.status === 'COMPLETED' || delivery.status === 'CANCELLED' || delivery.status === 'FAILED') {
-      throw new ConflictException({
-        code: 'TERMINAL_STATE_CANNOT_BE_CANCELLED',
-        message: `Delivery in terminal state ${delivery.status} cannot be cancelled`,
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      const claimed = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          status: { notIn: TERMINAL_DELIVERY_STATUSES },
+        },
+        data: { status: 'CANCELLED' },
       });
-    }
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
-      data: { status: 'CANCELLED' },
-    });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: 'TERMINAL_STATE_CANNOT_BE_CANCELLED',
+          message: 'Delivery is already in a terminal state and cannot be cancelled',
+        });
+      }
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorUserId: actor.userId,
-        action: 'DELIVERY_CANCELLED',
-        entityType: 'DELIVERY',
-        entityId: deliveryId,
-        result: 'SUCCESS',
-        afterJson: { reason: dto.reason },
-      },
+      const result = await tx.delivery.findUnique({ where: { id: deliveryId } });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.userId,
+          action: 'DELIVERY_CANCELLED',
+          entityType: 'DELIVERY',
+          entityId: deliveryId,
+          result: 'SUCCESS',
+          afterJson: { reason: dto.reason },
+        },
+      });
+      return result;
     });
 
     this.broadcastStatusChanged(deliveryId, 'CANCELLED', actor);
@@ -392,16 +406,26 @@ export class DeliveriesService {
    */
   async completeDeliveryIfEligible(deliveryId: string, actor: DeliveryActor) {
     try {
-      const evaluation = await this.evaluateDeliveryCompletion(deliveryId);
-      if (evaluation.completed && evaluation.targetStatus) {
-        const delivery = await this.prisma.delivery.findUnique({ where: { id: deliveryId } });
-        if (delivery && delivery.status === 'EN_ROUTE') {
-          await this.prisma.delivery.update({
-            where: { id: deliveryId },
-            data: { status: evaluation.targetStatus, completedAt: new Date() },
-          });
-          this.broadcastStatusChanged(deliveryId, evaluation.targetStatus, actor);
+      const updated = await this.prisma.$transaction(async (tx: any) => {
+        const evaluation = await this.evaluateDeliveryCompletion(deliveryId, tx);
+        if (!evaluation.completed || !evaluation.targetStatus) {
+          return null;
         }
+
+        const claimed = await tx.delivery.updateMany({
+          where: { id: deliveryId, status: 'EN_ROUTE' },
+          data: { status: evaluation.targetStatus, completedAt: new Date() },
+        });
+
+        if (claimed.count !== 1) {
+          return null;
+        }
+
+        return tx.delivery.findUnique({ where: { id: deliveryId } });
+      });
+
+      if (updated) {
+        this.broadcastStatusChanged(deliveryId, updated.status, actor);
       }
     } catch (err: unknown) {
       this.logger.warn(`Failed to auto-complete delivery ${deliveryId}: ${err}`);
