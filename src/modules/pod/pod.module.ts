@@ -5,6 +5,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { DeliveriesModule } from '../deliveries/deliveries.module';
 import { LocalPrivateStorageAdapter } from './adapters/local-private-storage.adapter';
 import { FileStorageService } from './services/file-storage.service';
+import { ImageNormalizerService } from './services/image-normalizer.service';
 import { PodService } from './services/pod.service';
 import { PodController } from './pod.controller';
 
@@ -16,7 +17,12 @@ import { PodController } from './pod.controller';
     forwardRef(() => RealtimeModule),
   ],
   controllers: [PodController],
-  providers: [LocalPrivateStorageAdapter, FileStorageService, PodService],
-  exports: [FileStorageService, PodService],
+  providers: [
+    LocalPrivateStorageAdapter,
+    ImageNormalizerService,
+    FileStorageService,
+    PodService,
+  ],
+  exports: [FileStorageService, ImageNormalizerService, PodService],
 })
 export class PodModule {}

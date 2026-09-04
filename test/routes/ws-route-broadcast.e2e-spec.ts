@@ -58,10 +58,12 @@ describe('Realtime Route Broadcast via WebSocket (E2E)', () => {
       create: { code: 'DRIVER', name: 'Driver' },
     });
 
+    const runId = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+
     ownerUser = await prisma.user.create({
       data: {
-        username: `ws_route_own_${Date.now()}`,
-        phone: `+62818${Date.now().toString().slice(-8)}`,
+        username: `ws_route_own_${runId}`,
+        phone: `+62818${Math.floor(10000000 + Math.random() * 90000000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
         status: 'ACTIVE',
@@ -69,7 +71,7 @@ describe('Realtime Route Broadcast via WebSocket (E2E)', () => {
     });
 
     ownerDevice = await prisma.device.create({
-      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: ownerUser.id, deviceIdentifier: `own-${runId}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
 
     ownerSession = await prisma.session.create({
@@ -84,8 +86,8 @@ describe('Realtime Route Broadcast via WebSocket (E2E)', () => {
 
     driverUserA = await prisma.user.create({
       data: {
-        username: `ws_route_drv_${Date.now()}`,
-        phone: `+62821${Date.now().toString().slice(-8)}`,
+        username: `ws_route_drv_${runId}`,
+        phone: `+62821${Math.floor(10000000 + Math.random() * 90000000)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
@@ -93,12 +95,12 @@ describe('Realtime Route Broadcast via WebSocket (E2E)', () => {
     });
 
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `DRV-WSRTE-${Date.now()}`, displayName: 'WS Route Driver', phone: driverUserA.phone },
+      data: { userId: driverUserA.id, employeeCode: `DRV-WSRTE-${runId}`, displayName: 'WS Route Driver', phone: driverUserA.phone },
     });
 
     deliveryA = await prisma.delivery.create({
       data: {
-        deliveryCode: `DEL-WSRTE-${Date.now()}`,
+        deliveryCode: `DEL-WSRTE-${runId}`,
         driverId: driverEntityA.id,
         createdBy: ownerUser.id,
         status: 'ASSIGNED',

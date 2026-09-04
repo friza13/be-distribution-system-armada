@@ -39,6 +39,7 @@ export class PodController {
   async uploadFile(
     @CurrentUser() user: any,
     @UploadedFile() file: any,
+    @Body() body: any,
   ) {
     if (!file || !file.buffer) {
       throw new BadRequestException({
@@ -47,12 +48,14 @@ export class PodController {
       });
     }
 
+    const category = (body?.category === 'signature' || file.fieldname === 'signature') ? 'signature' : 'photo';
+
     const fileRecord = await this.fileStorageService.saveFileRecord(
       file.buffer,
       file.originalname || 'upload.jpg',
       file.mimetype || 'image/jpeg',
       user.id,
-      'photo',
+      category,
     );
 
     return {

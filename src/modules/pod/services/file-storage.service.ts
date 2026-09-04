@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { LocalPrivateStorageAdapter } from '../adapters/local-private-storage.adapter';
+import { ImageNormalizerService } from './image-normalizer.service';
 
 @Injectable()
 export class FileStorageService {
@@ -16,6 +17,7 @@ export class FileStorageService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly localStorageAdapter: LocalPrivateStorageAdapter,
+    private readonly imageNormalizer: ImageNormalizerService,
   ) {}
 
   validateMagicBytesAndType(buffer: Buffer, mimeType: string): void {
@@ -89,7 +91,7 @@ export class FileStorageService {
     // 1. Validate magic bytes
     this.validateMagicBytesAndType(fileBuffer, mimeType);
 
-    // 2. Validate Size Cap
+    // 2. Validate Size Cap on raw upload
     const maxSize = fileCategory === 'signature' ? 500 * 1024 : 5 * 1024 * 1024;
     if (fileBuffer.length > maxSize) {
       throw new UnprocessableEntityException({
@@ -98,21 +100,42 @@ export class FileStorageService {
       });
     }
 
-    // 3. Save file via Storage Adapter
-    const saved = await this.localStorageAdapter.saveFile(fileBuffer, originalName, mimeType);
+    // 3. Conditional Image Normalization (Separate Photo vs Signature pipelines)
+    let bufferToSave = fileBuffer;
+    let finalMime = mimeType;
+    if (fileCategory === 'signature') {
+      const normalizedSig = await this.imageNormalizer.normalizeSignature(fileBuffer, mimeType);
+      bufferToSave = normalizedSig.buffer;
+      finalMime = normalizedSig.mimeType;
+    } else {
+      const normalizedPhoto = await this.imageNormalizer.normalizePodPhoto(fileBuffer, mimeType);
+      bufferToSave = normalizedPhoto.buffer;
+      finalMime = normalizedPhoto.mimeType;
+    }
 
-    // 4. Save FileRecord to DB
-    const fileRecord = await this.prisma.fileRecord.create({
-      data: {
-        objectKey: saved.objectKey,
-        mediaType: mimeType,
-        sizeBytes: saved.sizeBytes,
-        checksumSha256: saved.checksumSha256,
-        uploadedBy: uploaderUserId,
-      },
-    });
+    // 4. Save normalized file via Storage Adapter
+    const saved = await this.localStorageAdapter.saveFile(bufferToSave, originalName, finalMime);
 
-    return fileRecord;
+    // 5. Save FileRecord to DB with Atomic Compensating Deletion on Failure
+    try {
+      const fileRecord = await this.prisma.fileRecord.create({
+        data: {
+          objectKey: saved.objectKey,
+          mediaType: finalMime,
+          sizeBytes: saved.sizeBytes,
+          checksumSha256: saved.checksumSha256,
+          uploadedBy: uploaderUserId,
+        },
+      });
+
+      return fileRecord;
+    } catch (dbError) {
+      this.logger.error(
+        `Failed to create FileRecord for ${saved.objectKey}, executing compensating file deletion`,
+      );
+      await this.localStorageAdapter.deleteFile(saved.objectKey).catch(() => {});
+      throw dbError;
+    }
   }
 
   async getAuthorizedFileBuffer(fileId: string, actorUserId: string, actorRole: string) {
