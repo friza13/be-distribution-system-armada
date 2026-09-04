@@ -9,6 +9,7 @@ import { PodService } from '../../src/modules/pod/services/pod.service';
 import { RoutesDomainService } from '../../src/modules/routes/services/routes-domain.service';
 import { WsRoomAuthorizerService } from '../../src/modules/realtime/services/ws-room-authorizer.service';
 import { RealtimeGateway } from '../../src/modules/realtime/gateways/realtime.gateway';
+import { RedisService } from '../../src/common/redis/redis.service';
 
 describe('approved security and logic fixes', () => {
   it('creates a pending non-privileged account regardless of the requested role', async () => {
@@ -57,7 +58,7 @@ describe('approved security and logic fixes', () => {
           device: { userId: 'user-1', status: 'ACTIVE' },
         }),
       },
-      user: { findUnique: jest.fn() },
+      user: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE', role: { code: 'DRIVER', rolePermissions: [] }, driver: null, id: 'user-1', username: 'user' }) },
     };
     const redis = { isRevoked: jest.fn().mockResolvedValue(null) };
     const strategy = new JwtStrategy(
@@ -220,6 +221,7 @@ describe('approved security and logic fixes', () => {
     gateway.server = server as any;
     const client = {
       emit: jest.fn(),
+      rooms: new Set(['socket-1']),
       data: {
         userId: 'owner-1',
         role: 'OWNER',
@@ -259,4 +261,303 @@ describe('approved security and logic fixes', () => {
       'delivery:delivery-1',
     )).resolves.toMatchObject({ authorized: false, reason: 'ROOM_ACCESS_DENIED' });
   });
+
+  it('forces database fallback after a revocation write fails even when Redis reads normally', async () => {
+    const redis = new RedisService({ get: jest.fn() } as any);
+    const set = jest.fn().mockRejectedValue(new Error('Redis write failed'));
+    const exists = jest.fn().mockResolvedValue(0);
+    (redis as any).client = { set, exists };
+    (redis as any).isConnected = true;
+
+    await redis.setRevocation('revoked:session:session-1');
+
+    await expect(redis.isRevoked('revoked:session:session-1')).resolves.toBeNull();
+    expect(exists).not.toHaveBeenCalled();
+  });
+
+  it('allows only one concurrent delivery terminal transition to win', async () => {
+    let status = 'EN_ROUTE';
+    let transactionTail = Promise.resolve();
+    const delivery = {
+      id: 'delivery-1',
+      status,
+      createdBy: 'owner-1',
+      driverId: 'driver-1',
+      stops: [],
+    };
+    const tx = {
+      deliveryStop: { findMany: jest.fn().mockResolvedValue([{ status: 'DELIVERED' }]) },
+      delivery: {
+        updateMany: jest.fn().mockImplementation(async ({ where, data }: any) => {
+          const canComplete = where.status === 'EN_ROUTE' && status === 'EN_ROUTE';
+          const canCancel = where.status?.notIn && status === 'EN_ROUTE';
+          if (!canComplete && !canCancel) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        }),
+        findUnique: jest.fn().mockImplementation(async () => ({ ...delivery, status })),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = {
+      delivery: {
+        findUnique: jest.fn().mockImplementation(async () => ({ ...delivery, status })),
+      },
+      $transaction: jest.fn(async (callback: (client: any) => Promise<unknown>) => {
+        const previous = transactionTail;
+        let release!: () => void;
+        transactionTail = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
+        try {
+          return await callback(tx);
+        } finally {
+          release();
+        }
+      }),
+    };
+    const service = new DeliveriesService(prisma as any);
+    const actor = { userId: 'owner-1', role: 'OWNER' };
+
+    const results = await Promise.allSettled([
+      service.completeDelivery('delivery-1', actor),
+      service.cancelDelivery('delivery-1', { reason: 'cancelled' } as any, actor),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(['COMPLETED', 'CANCELLED']).toContain(status);
+    expect(tx.delivery.updateMany).toHaveBeenCalled();
+  });
+
+  it('claims route idempotency inside the route mutation transaction before creating a route', async () => {
+    const events: string[] = [];
+    const delivery = {
+      id: 'delivery-1',
+      createdBy: 'owner-1',
+      driverId: null,
+      stops: [{ id: 'stop-1' }],
+    };
+    const tx = {
+      $executeRaw: jest.fn().mockImplementation(async () => { events.push('lock'); }),
+      idempotencyRecord: {
+        create: jest.fn().mockImplementation(async () => { events.push('claim'); }),
+        update: jest.fn().mockImplementation(async () => { events.push('store-response'); }),
+      },
+      route: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(async () => {
+          events.push('route');
+          return { id: 'route-1', deliveryId: 'delivery-1', version: 1, source: 'MANUAL', selectedAt: new Date() };
+        }),
+      },
+      routeStop: { createMany: jest.fn() },
+      delivery: { update: jest.fn() },
+    };
+    const prisma = {
+      delivery: { findUnique: jest.fn().mockResolvedValue(delivery) },
+      idempotencyRecord: { findUnique: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (callback: (client: any) => Promise<unknown>) => callback(tx)),
+    };
+    const service = new RoutesDomainService(
+      prisma as any,
+      { incrRateLimit: jest.fn().mockResolvedValue(1) } as any,
+      {} as any,
+      {} as any,
+    );
+
+    await service.selectRoute('delivery-1', {
+      source: 'MANUAL',
+      recommendedSequence: ['stop-1'],
+      totalDistanceMeters: 1,
+      estimatedDurationSeconds: 1,
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    } as any, { userId: 'owner-1', role: 'OWNER', driverId: null });
+
+    expect(events.indexOf('claim')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('claim')).toBeLessThan(events.indexOf('route'));
+  });
+
+  it('rejects an expired WebRTC response and conditionally times out pending sessions', async () => {
+    const expiredSession = {
+      id: 'call-1',
+      ownerId: 'owner-1',
+      driverId: 'driver-1',
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() - 1),
+    };
+    const prisma = {
+      realtimeSession: {
+        findUnique: jest.fn().mockResolvedValue(expiredSession),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const service = new CallSessionService(prisma as any, {} as any, {} as any);
+
+    await expect(service.respondToCallSession('call-1', 'ACCEPT', {
+      userId: 'driver-user',
+      role: 'DRIVER',
+      driverId: 'driver-1',
+    })).rejects.toMatchObject({ response: { code: 'CALL_SESSION_EXPIRED' } });
+
+    await (service as any).handlePendingTimeout('call-1');
+    expect(prisma.realtimeSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: 'PENDING', expiresAt: expect.any(Object) }),
+    }));
+  });
+
+  it('authorizes signaling from actual Socket.IO room membership', async () => {
+    const server = { to: jest.fn().mockReturnValue({ emit: jest.fn() }) };
+    const callSessionService = { authorizeSignal: jest.fn().mockResolvedValue({}) };
+    const gateway = new RealtimeGateway(
+      {} as any, {} as any, {} as any, {} as any,
+      { get: jest.fn((key: string, fallback: number) => fallback) } as any,
+      {} as any, {} as any, callSessionService as any,
+    );
+    gateway.server = server as any;
+    const client = {
+      emit: jest.fn(),
+      rooms: new Set(['socket-1', 'session:call-1']),
+      data: {
+        userId: 'owner-1', role: 'OWNER', driverId: null, deviceId: 'device-1',
+        joinedRooms: new Set<string>(),
+      },
+    } as any;
+
+    await gateway.handleWebrtcSignalOffer(client, { sessionId: 'call-1', sdp: 'offer' });
+
+    expect(callSessionService.authorizeSignal).toHaveBeenCalled();
+    expect(server.to).toHaveBeenCalledWith('session:call-1');
+  });
+
+
+  it('rejects a revoked session even when Redis reports no revocation key', async () => {
+    const prisma = {
+      session: {
+        findUnique: jest.fn().mockResolvedValue({
+          userId: 'user-1',
+          deviceId: 'device-1',
+          isRevoked: true,
+          expiresAt: new Date(Date.now() + 60_000),
+          device: { userId: 'user-1', status: 'ACTIVE' },
+        }),
+      },
+      user: { findUnique: jest.fn().mockResolvedValue({ status: 'ACTIVE', role: { code: 'DRIVER', rolePermissions: [] }, driver: null, id: 'user-1', username: 'user' }) },
+    };
+    const strategy = new JwtStrategy(
+      { get: jest.fn((key: string, fallback: string) => fallback) } as any,
+      prisma as any,
+      { isRevoked: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    await expect(strategy.validate({
+      sub: 'user-1', role: 'DRIVER', deviceId: 'device-1', sessionId: 'session-1', type: 'ACCESS_TOKEN',
+    } as any)).rejects.toMatchObject({ response: { code: 'TOKEN_REVOKED' } });
+  });
+
+  it('mutates a route once when concurrent requests claim the same idempotency key', async () => {
+    const delivery = {
+      id: 'delivery-1',
+      createdBy: 'owner-1',
+      driverId: null,
+      stops: [{ id: 'stop-1' }],
+    };
+    const idempotencyKey = '00000000-0000-4000-8000-000000000002';
+    let record: any = null;
+    let routeCount = 0;
+    let transactionTail = Promise.resolve();
+    const tx = {
+      $executeRaw: jest.fn(),
+      idempotencyRecord: {
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          if (record) throw { code: 'P2002' };
+          record = { responseBody: data.responseBody };
+        }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => {
+          record.responseBody = data.responseBody;
+        }),
+      },
+      route: {
+        findFirst: jest.fn().mockImplementation(async () => routeCount ? { version: routeCount } : null),
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          routeCount += 1;
+          return { id: `route-${routeCount}`, ...data };
+        }),
+      },
+      routeStop: { createMany: jest.fn() },
+      delivery: { update: jest.fn() },
+    };
+    const prisma = {
+      delivery: { findUnique: jest.fn().mockResolvedValue(delivery) },
+      idempotencyRecord: {
+        findUnique: jest.fn().mockImplementation(async () => record),
+      },
+      $transaction: jest.fn(async (callback: (client: any) => Promise<unknown>) => {
+        const previous = transactionTail;
+        let release!: () => void;
+        transactionTail = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
+        try {
+          return await callback(tx);
+        } finally {
+          release();
+        }
+      }),
+    };
+    const service = new RoutesDomainService(
+      prisma as any,
+      { incrRateLimit: jest.fn().mockResolvedValue(1) } as any,
+      {} as any,
+      {} as any,
+    );
+    const request = {
+      source: 'MANUAL',
+      recommendedSequence: ['stop-1'],
+      totalDistanceMeters: 1,
+      estimatedDurationSeconds: 1,
+      idempotencyKey,
+    } as any;
+    const actor = { userId: 'owner-1', role: 'OWNER', driverId: null };
+
+    const results = await Promise.all([
+      service.selectRoute('delivery-1', request, actor),
+      service.selectRoute('delivery-1', request, actor),
+    ]);
+
+    expect(routeCount).toBe(1);
+    expect(results.filter((result) => result.idempotent)).toHaveLength(1);
+    expect(results.map((result) => result.version)).toEqual([1, 1]);
+  });
+
+  it('allows either accept or timeout to claim a pending WebRTC session, never both', async () => {
+    let status = 'PENDING';
+    const responseSession = {
+      id: 'call-1', ownerId: 'owner-1', driverId: 'driver-1', status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const timeoutSession = { ...responseSession, expiresAt: new Date(Date.now() - 1) };
+    const findUnique = jest.fn()
+      .mockResolvedValueOnce(responseSession)
+      .mockResolvedValueOnce(timeoutSession)
+      .mockImplementation(async () => ({ ...responseSession, status, expiresAt: status === 'TIMEOUT' ? timeoutSession.expiresAt : responseSession.expiresAt }));
+    const updateMany = jest.fn().mockImplementation(async ({ where, data }: any) => {
+      if (status !== 'PENDING') return { count: 0 };
+      status = data.status;
+      return { count: 1 };
+    });
+    const prisma = {
+      realtimeSession: { findUnique, updateMany },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new CallSessionService(prisma as any, {} as any, {} as any);
+
+    const results = await Promise.allSettled([
+      service.respondToCallSession('call-1', 'ACCEPT', { userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1' }),
+      (service as any).handlePendingTimeout('call-1'),
+    ]);
+
+    expect(status).toBe('ACTIVE');
+    expect(updateMany).toHaveBeenCalledTimes(2);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+  });
+
 });

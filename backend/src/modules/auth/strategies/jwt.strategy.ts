@@ -54,34 +54,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       });
     }
 
-    if (isSessionRevoked === null) {
-      const session = await this.prisma.session.findUnique({
-        where: { id: payload.sessionId },
-        select: {
-          userId: true,
-          deviceId: true,
-          isRevoked: true,
-          expiresAt: true,
-          device: { select: { userId: true, status: true } },
-        },
-      });
-
-      if (
-        !session ||
-        session.userId !== payload.sub ||
-        session.deviceId !== payload.deviceId ||
-        session.device.userId !== payload.sub ||
-        session.isRevoked ||
-        session.expiresAt <= new Date() ||
-        session.device.status !== 'ACTIVE'
-      ) {
-        throw new UnauthorizedException({
-          code: 'TOKEN_REVOKED',
-          message: 'Token or session has been revoked',
-        });
-      }
-    }
-
     // Verify User in Database
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
@@ -130,6 +102,34 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         code: 'TOKEN_REVOKED',
         message: 'User tokens have been revoked',
       });
+    }
+
+    if (isSessionRevoked === false || isSessionRevoked === null) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: payload.sessionId },
+        select: {
+          userId: true,
+          deviceId: true,
+          isRevoked: true,
+          expiresAt: true,
+          device: { select: { userId: true, status: true } },
+        },
+      });
+
+      if (
+        !session ||
+        session.userId !== payload.sub ||
+        session.deviceId !== payload.deviceId ||
+        session.device.userId !== payload.sub ||
+        session.isRevoked ||
+        session.expiresAt <= new Date() ||
+        session.device.status !== 'ACTIVE'
+      ) {
+        throw new UnauthorizedException({
+          code: 'TOKEN_REVOKED',
+          message: 'Token or session has been revoked',
+        });
+      }
     }
 
     const permissions = user.role.rolePermissions.map((rp) => rp.permission.code);

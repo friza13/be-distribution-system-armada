@@ -136,7 +136,35 @@ export class WsJwtAuthGuard implements CanActivate {
       throw new Error('UNAUTHORIZED: Session revoked');
     }
 
-    if (isSessionRevoked === null) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: {
+        role: {
+          include: {
+            rolePermissions: {
+              include: {
+                permission: true,
+              },
+            },
+          },
+        },
+        driver: true,
+      },
+    });
+
+    if (!user) {
+      throw new Error('UNAUTHORIZED: User not found');
+    }
+
+    if (user.status !== 'ACTIVE') {
+      throw new Error(`UNAUTHORIZED: Account ${user.status.toLowerCase()}`);
+    }
+
+    if (user.role.code !== payload.role) {
+      throw new Error('UNAUTHORIZED: ROLE_UPDATED_REAUTH_REQUIRED');
+    }
+
+    if (isSessionRevoked === false || isSessionRevoked === null) {
       const session = await this.prisma.session.findUnique({
         where: { id: payload.sessionId },
         select: {
@@ -166,34 +194,6 @@ export class WsJwtAuthGuard implements CanActivate {
     );
     if (isUserRevoked === true) {
       throw new Error('UNAUTHORIZED: User revoked');
-    }
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: {
-        role: {
-          include: {
-            rolePermissions: {
-              include: {
-                permission: true,
-              },
-            },
-          },
-        },
-        driver: true,
-      },
-    });
-
-    if (!user) {
-      throw new Error('UNAUTHORIZED: User not found');
-    }
-
-    if (user.status !== 'ACTIVE') {
-      throw new Error(`UNAUTHORIZED: Account ${user.status.toLowerCase()}`);
-    }
-
-    if (user.role.code !== payload.role) {
-      throw new Error('UNAUTHORIZED: ROLE_UPDATED_REAUTH_REQUIRED');
     }
 
     const permissions = user.role.rolePermissions.map((rp) => rp.permission.code);

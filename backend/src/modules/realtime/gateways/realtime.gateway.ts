@@ -538,7 +538,7 @@ export class RealtimeGateway
 
       // Join socket to session room upon acceptance
       if (dto.action === 'ACCEPT') {
-        client.join(`session:${dto.sessionId}`);
+        await client.join(`session:${dto.sessionId}`);
         data.joinedRooms.add(`session:${dto.sessionId}`);
       }
     } catch (err: unknown) {
@@ -628,7 +628,7 @@ export class RealtimeGateway
     data: AuthenticatedSocketData,
     sessionId: string,
   ): Promise<void> {
-    if (!data.joinedRooms.has(`session:${sessionId}`)) {
+    if (!client.rooms.has(`session:${sessionId}`)) {
       throw new ForbiddenException({
         code: 'ROOM_ACCESS_DENIED',
         message: 'Join the call session room before sending signaling messages',

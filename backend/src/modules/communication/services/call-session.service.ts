@@ -157,6 +157,14 @@ export class CallSessionService {
       });
     }
 
+    const now = new Date();
+    if (session.expiresAt <= now) {
+      throw new ConflictException({
+        code: 'CALL_SESSION_EXPIRED',
+        message: 'Call session has expired',
+      });
+    }
+
     if (session.status !== 'PENDING') {
       throw new ConflictException({
         code: 'INVALID_CALL_STATE',
@@ -165,15 +173,33 @@ export class CallSessionService {
     }
 
     const newStatus: RealtimeSessionStatus = action === 'ACCEPT' ? 'ACTIVE' : 'DECLINED';
-    const now = new Date();
-
-    const updated = await this.prisma.realtimeSession.update({
-      where: { id: sessionId },
+    const claimed = await this.prisma.realtimeSession.updateMany({
+      where: {
+        id: sessionId,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
       data: {
         status: newStatus,
         startedAt: action === 'ACCEPT' ? now : null,
       },
     });
+
+    if (claimed.count !== 1) {
+      const current = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
+      if (current && current.expiresAt <= new Date()) {
+        throw new ConflictException({
+          code: 'CALL_SESSION_EXPIRED',
+          message: 'Call session has expired',
+        });
+      }
+      throw new ConflictException({
+        code: 'INVALID_CALL_STATE',
+        message: `Cannot respond to call in status ${current?.status || session.status}. Expected PENDING`,
+      });
+    }
+
+    const updated = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
 
     await this.prisma.auditLog.create({
       data: {
@@ -277,13 +303,19 @@ export class CallSessionService {
     try {
       const session = await this.prisma.realtimeSession.findUnique({ where: { id: sessionId } });
       if (session && session.status === 'PENDING') {
-        await this.prisma.realtimeSession.update({
-          where: { id: sessionId },
+        const claimed = await this.prisma.realtimeSession.updateMany({
+          where: {
+            id: sessionId,
+            status: 'PENDING',
+            expiresAt: { lte: new Date() },
+          },
           data: { status: 'TIMEOUT' },
         });
 
-        this.logger.log(`Call session ${sessionId} timed out after 30s unanswered`);
-        this.broadcastCallEnded(sessionId, 'TIMEOUT', { userId: session.ownerId, role: 'SYSTEM' });
+        if (claimed.count === 1) {
+          this.logger.log(`Call session ${sessionId} timed out after 30s unanswered`);
+          this.broadcastCallEnded(sessionId, 'TIMEOUT', { userId: session.ownerId, role: 'SYSTEM' });
+        }
       }
     } catch (err: unknown) {
       this.logger.warn(`Failed to process call timeout for ${sessionId}: ${err}`);
