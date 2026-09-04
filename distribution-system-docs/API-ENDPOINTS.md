@@ -111,11 +111,11 @@ Below is the audited runtime inventory of all 55 REST endpoints enumerated direc
 | 28 | `POST` | `/v1/me/stops/:id/fail` | `StopsController` | Bearer JWT | DRIVER | Assigned Stop Scope | Verified |
 | 29 | `POST` | `/v1/me/stops/:id/skip` | `StopsController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Permitted Scope | Verified |
 | **7. Route Optimization (Path Correction: `/v1/deliveries/:id/routes/*`)** | | | | | | | |
-| 30 | `POST` | `/v1/deliveries/:id/routes/recommend` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified |
-| 31 | `POST` | `/v1/deliveries/:id/routes/select` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified |
-| 32 | `PATCH` | `/v1/deliveries/:id/routes/reorder` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified |
-| 33 | `GET` | `/v1/deliveries/:id/routes/current` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified |
-| 34 | `GET` | `/v1/deliveries/:id/routes/versions` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified |
+| 30 | `POST` | `/v1/deliveries/:id/routes/recommend` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified (OSRM + Haversine Failover) |
+| 31 | `POST` | `/v1/deliveries/:id/routes/select` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified (2-Opt TSP Selection) |
+| 32 | `PATCH` | `/v1/deliveries/:id/routes/reorder` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified (Manual Reordering) |
+| 33 | `GET` | `/v1/deliveries/:id/routes/current` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified (Active Version Geometry) |
+| 34 | `GET` | `/v1/deliveries/:id/routes/versions` | `RoutesController` | Bearer JWT | ADMIN, SUPER_ADMIN, OWNER, DRIVER | Delivery Route Scope | Verified (Immutable Audit History) |
 | **8. GPS Telemetry Ingestion** | | | | | | | |
 | 35 | `POST` | `/v1/me/location` | `TrackingController` | Bearer JWT | DRIVER | Driver Telemetry Scope | Verified |
 | 36 | `POST` | `/v1/me/location/batch` | `TrackingController` | Bearer JWT | DRIVER | Driver Telemetry Scope | Verified |

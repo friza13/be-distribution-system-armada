@@ -74,7 +74,7 @@ Refer to [`distribution-system-docs/API-ENDPOINTS.md`](API-ENDPOINTS.md) for ful
 - **Auth:** `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/csrf`
 - **Deliveries:** `POST /v1/deliveries`, `GET /v1/deliveries/:id`, `POST /v1/deliveries/:id/assign`, `POST /v1/deliveries/:id/accept`, `POST /v1/deliveries/:id/start`, `POST /v1/deliveries/:id/complete`
 - **Stops:** `POST /v1/me/stops/:id/depart`, `POST /v1/me/stops/:id/arrive`, `POST /v1/me/stops/:id/unload`, `POST /v1/me/stops/:id/fail`, `POST /v1/me/stops/:id/skip`
-- **Routes:** `POST /v1/deliveries/:id/routes/recommend`, `POST /v1/deliveries/:id/routes/select`, `PATCH /v1/deliveries/:id/routes/reorder`, `GET /v1/deliveries/:id/routes/current`
+- **Routes & OSRM Boundary:** `POST /v1/deliveries/:id/routes/recommend`, `POST /v1/deliveries/:id/routes/select`, `PATCH /v1/deliveries/:id/routes/reorder`, `GET /v1/deliveries/:id/routes/current`. Note: OSRM calculates travel matrix and polyline; DMS computes 2-Opt TSP stop ordering and versioning.
 - **Keys:** `POST /v1/e2ee/keys/register`, `POST /v1/e2ee/keys/prekeys`, `GET /v1/e2ee/keys/bundle/:deviceId`
 - **Telemetry:** `POST /v1/me/location`, `POST /v1/me/location/batch`
 - **Fleet:** `GET /v1/fleet/locations`, `GET /v1/drivers/:id/location-history`

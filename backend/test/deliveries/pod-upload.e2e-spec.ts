@@ -71,15 +71,15 @@ describe('Secure File Upload & Proof of Delivery (POD) Service (E2E)', () => {
     // Owner Setup
     ownerUser = await prisma.user.create({
       data: {
-        username: `pod_own_${Date.now()}`,
-        phone: `+62818${Date.now().toString().slice(-8)}`,
+        username: `pod_own_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62818${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: ownerRole.id,
         status: 'ACTIVE',
       },
     });
     const ownerDev = await prisma.device.create({
-      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: ownerUser.id, deviceIdentifier: `own-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     const ownerSes = await prisma.session.create({
       data: { userId: ownerUser.id, deviceId: ownerDev.id, refreshTokenHash: 'h_own', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -93,18 +93,18 @@ describe('Secure File Upload & Proof of Delivery (POD) Service (E2E)', () => {
     // Driver A Setup
     driverUserA = await prisma.user.create({
       data: {
-        username: `pod_drv_a_${Date.now()}`,
-        phone: `+62821${Date.now().toString().slice(-8)}`,
+        username: `pod_drv_a_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62821${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
       },
     });
     driverEntityA = await prisma.driver.create({
-      data: { userId: driverUserA.id, employeeCode: `DRV-POD-A-${Date.now()}`, displayName: 'Driver POD A', phone: driverUserA.phone },
+      data: { userId: driverUserA.id, employeeCode: `DRV-POD-A-${Date.now()}-${Math.floor(Math.random() * 10000)}`, displayName: 'Driver POD A', phone: driverUserA.phone },
     });
     const driverDevA = await prisma.device.create({
-      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}`, platform: 'ANDROID', appVersion: '1.0.0' },
+      data: { userId: driverUserA.id, deviceIdentifier: `drva-${Date.now()}-${Math.floor(Math.random() * 10000)}`, platform: 'ANDROID', appVersion: '1.0.0' },
     });
     const driverSesA = await prisma.session.create({
       data: { userId: driverUserA.id, deviceId: driverDevA.id, refreshTokenHash: 'h_drva', tokenFamily: uuidv4(), expiresAt: new Date(Date.now() + 86400000) },
@@ -118,8 +118,8 @@ describe('Secure File Upload & Proof of Delivery (POD) Service (E2E)', () => {
     // Driver B Setup
     driverUserB = await prisma.user.create({
       data: {
-        username: `pod_drv_b_${Date.now()}`,
-        phone: `+62822${Date.now().toString().slice(-8)}`,
+        username: `pod_drv_b_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+        phone: `+62822${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`,
         passwordHash: await hashPassword('Password123!'),
         roleId: driverRole.id,
         status: 'ACTIVE',
