@@ -47,11 +47,39 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       `revoked:session:${payload.sessionId}`,
     );
 
-    if (isSessionRevoked) {
+    if (isSessionRevoked === true) {
       throw new UnauthorizedException({
         code: 'TOKEN_REVOKED',
         message: 'Token or session has been revoked',
       });
+    }
+
+    if (isSessionRevoked === null) {
+      const session = await this.prisma.session.findUnique({
+        where: { id: payload.sessionId },
+        select: {
+          userId: true,
+          deviceId: true,
+          isRevoked: true,
+          expiresAt: true,
+          device: { select: { userId: true, status: true } },
+        },
+      });
+
+      if (
+        !session ||
+        session.userId !== payload.sub ||
+        session.deviceId !== payload.deviceId ||
+        session.device.userId !== payload.sub ||
+        session.isRevoked ||
+        session.expiresAt <= new Date() ||
+        session.device.status !== 'ACTIVE'
+      ) {
+        throw new UnauthorizedException({
+          code: 'TOKEN_REVOKED',
+          message: 'Token or session has been revoked',
+        });
+      }
     }
 
     // Verify User in Database
@@ -97,7 +125,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       `revoked:user:${payload.sub}`,
     );
 
-    if (isUserRevoked) {
+    if (isUserRevoked === true) {
       throw new UnauthorizedException({
         code: 'TOKEN_REVOKED',
         message: 'User tokens have been revoked',

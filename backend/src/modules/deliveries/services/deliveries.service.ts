@@ -53,14 +53,18 @@ export class DeliveriesService {
       });
     }
 
-    // Object-level IDOR check for Driver
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || delivery.driverId !== actor.driverId) {
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not assigned to this delivery',
-        });
-      }
+    // Object-level ownership checks for both assigned drivers and owners.
+    if (actor.role === 'DRIVER' && (!actor.driverId || delivery.driverId !== actor.driverId)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not assigned to this delivery',
+      });
+    }
+    if (actor.role === 'OWNER' && delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to access this delivery',
+      });
     }
 
     return delivery;
@@ -139,13 +143,7 @@ export class DeliveriesService {
   }
 
   async assignDelivery(deliveryId: string, dto: AssignDeliveryDto, actor: DeliveryActor) {
-    const delivery = await this.prisma.delivery.findUnique({
-      where: { id: deliveryId },
-    });
-
-    if (!delivery) {
-      throw new NotFoundException({ code: 'DELIVERY_NOT_FOUND', message: 'Delivery not found' });
-    }
+    const delivery = await this.getDeliveryById(deliveryId, actor);
 
     if (delivery.status !== 'DRAFT' && delivery.status !== 'ASSIGNED') {
       throw new ConflictException({

@@ -128,21 +128,24 @@ export class FileStorageService {
       throw new NotFoundException({ code: 'FILE_NOT_FOUND', message: 'File not found' });
     }
 
-    // Object Ownership Check for Drivers
-    if (actorRole === 'DRIVER') {
-      const driver = await this.prisma.driver.findUnique({ where: { userId: actorUserId } });
-      const driverId = driver?.id;
+    const isUploader = fileRecord.uploadedBy === actorUserId;
+    const driver = actorRole === 'DRIVER'
+      ? await this.prisma.driver.findUnique({ where: { userId: actorUserId } })
+      : null;
+    const driverId = driver?.id;
+    const photoAccess = fileRecord.photoPods.some((p) => p.deliveryStop.delivery.driverId === driverId);
+    const sigAccess = fileRecord.signaturePods.some((p) => p.deliveryStop.delivery.driverId === driverId);
+    const ownerAccess = fileRecord.photoPods.some((p) => p.deliveryStop.delivery.createdBy === actorUserId)
+      || fileRecord.signaturePods.some((p) => p.deliveryStop.delivery.createdBy === actorUserId);
 
-      const photoAccess = fileRecord.photoPods.some((p) => p.deliveryStop.delivery.driverId === driverId);
-      const sigAccess = fileRecord.signaturePods.some((p) => p.deliveryStop.delivery.driverId === driverId);
-      const isUploader = fileRecord.uploadedBy === actorUserId;
-
-      if (!isUploader && !photoAccess && !sigAccess) {
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not authorized to download this POD file',
-        });
-      }
+    if (
+      (actorRole === 'DRIVER' && !isUploader && !photoAccess && !sigAccess) ||
+      (actorRole === 'OWNER' && !isUploader && !ownerAccess)
+    ) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to download this POD file',
+      });
     }
 
     const buffer = await this.localStorageAdapter.getFileBuffer(fileRecord.objectKey);

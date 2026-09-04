@@ -330,11 +330,11 @@ export class AuthService {
     }
 
     const role = await this.prisma.role.findUnique({
-      where: { code: dto.roleCode },
+      where: { code: 'DRIVER' },
     });
 
     if (!role) {
-      throw new BadRequestException(`Role ${dto.roleCode} does not exist`);
+      throw new BadRequestException('Default registration role is not configured');
     }
 
     const passwordHash = await hashPassword(dto.password);
@@ -346,7 +346,7 @@ export class AuthService {
         phone: dto.phone,
         passwordHash,
         roleId: role.id,
-        status: 'ACTIVE',
+        status: 'PENDING_ACTIVATION',
       },
       include: { role: true },
     });

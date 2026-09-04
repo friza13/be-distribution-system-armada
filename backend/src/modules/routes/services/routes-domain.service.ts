@@ -59,17 +59,21 @@ export class RoutesDomainService {
       });
     }
 
-    // Role-based IDOR Defense
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || delivery.driverId !== actor.driverId) {
-        this.logger.warn(
-          `Anti-IDOR rejection: Driver ${actor.driverId || actor.userId} attempted to access delivery ${deliveryId} assigned to driver ${delivery.driverId}`,
-        );
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not assigned to this delivery',
-        });
-      }
+    // Role-based object authorization.
+    if (actor.role === 'DRIVER' && (!actor.driverId || delivery.driverId !== actor.driverId)) {
+      this.logger.warn(
+        `Anti-IDOR rejection: Driver ${actor.driverId || actor.userId} attempted to access delivery ${deliveryId} assigned to driver ${delivery.driverId}`,
+      );
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not assigned to this delivery',
+      });
+    }
+    if (actor.role === 'OWNER' && delivery.createdBy !== actor.userId) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not authorized to access this delivery',
+      });
     }
 
     return delivery;
@@ -188,6 +192,7 @@ export class RoutesDomainService {
         });
       }
     }
+    this.validateCompleteStopSet(delivery.stops, dto.recommendedSequence);
 
     // Execute Transaction: Fetch max version, insert new Route and RouteStops
     const routeResult = await this.prisma.$transaction(async (tx: any) => {
@@ -303,6 +308,11 @@ export class RoutesDomainService {
         });
       }
     }
+    this.validateCompleteStopSet(
+      delivery.stops,
+      dto.stopSequence.map((item) => item.deliveryStopId),
+      dto.stopSequence.map((item) => item.sequence),
+    );
 
     const reorderResult = await this.prisma.$transaction(async (tx: any) => {
       // 1. First pass: Set temporary negative sequences to prevent @@unique([deliveryId, sequence]) collision
@@ -473,6 +483,38 @@ export class RoutesDomainService {
         selectedAt: r.selectedAt,
       })),
     };
+  }
+
+  private validateCompleteStopSet(
+    deliveryStops: Array<{ id: string }>,
+    submittedStopIds: string[],
+    submittedSequences?: number[],
+  ): void {
+    const expectedIds = new Set(deliveryStops.map((stop) => stop.id));
+    const submittedIds = new Set(submittedStopIds);
+    const hasExactIds =
+      expectedIds.size > 0 &&
+      submittedStopIds.length === expectedIds.size &&
+      submittedIds.size === expectedIds.size &&
+      submittedStopIds.every((stopId) => expectedIds.has(stopId));
+
+    if (!hasExactIds) {
+      throw new UnprocessableEntityException({
+        code: 'INVALID_STOP_SET',
+        message: 'Route must contain every delivery stop exactly once',
+      });
+    }
+
+    if (submittedSequences) {
+      const sortedSequences = [...submittedSequences].sort((a, b) => a - b);
+      const contiguous = sortedSequences.every((sequence, index) => sequence === index + 1);
+      if (!contiguous) {
+        throw new UnprocessableEntityException({
+          code: 'INVALID_STOP_SEQUENCE',
+          message: 'Route stop sequences must be unique and contiguous from 1 to N',
+        });
+      }
+    }
   }
 
   private broadcastRouteUpdated(deliveryId: string, routeResult: any, actor: RouteActor) {

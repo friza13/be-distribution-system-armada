@@ -8,7 +8,7 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { WsJwtAuthGuard, AuthenticatedSocketData } from '../guards/ws-jwt-auth.guard';
@@ -562,6 +562,7 @@ export class RealtimeGateway
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       const envelope = formatRealtimeEvent(
         'webrtc.signal.offer',
         { sessionId: dto.sessionId, sdp: dto.sdp },
@@ -582,6 +583,7 @@ export class RealtimeGateway
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       const envelope = formatRealtimeEvent(
         'webrtc.signal.answer',
         { sessionId: dto.sessionId, sdp: dto.sdp },
@@ -602,6 +604,7 @@ export class RealtimeGateway
     if (!data || !data.userId) return;
 
     try {
+      await this.assertWebrtcSignalAccess(client, data, dto.sessionId);
       // ICE candidate rate limiting per session (Max 50 candidates per socket)
       const candidateCount = await this.redis.incrRateLimit(`throttle:ice:${client.id}:${dto.sessionId}`, 60);
       if (candidateCount > 50) {
@@ -618,6 +621,26 @@ export class RealtimeGateway
     } catch (err: unknown) {
       client.emit('call_error', { code: 'SIGNALING_FAILED', message: 'Failed to relay ICE candidate' });
     }
+  }
+
+  private async assertWebrtcSignalAccess(
+    client: Socket,
+    data: AuthenticatedSocketData,
+    sessionId: string,
+  ): Promise<void> {
+    if (!data.joinedRooms.has(`session:${sessionId}`)) {
+      throw new ForbiddenException({
+        code: 'ROOM_ACCESS_DENIED',
+        message: 'Join the call session room before sending signaling messages',
+      });
+    }
+
+    await this.callSessionService.authorizeSignal(sessionId, {
+      userId: data.userId,
+      role: data.role,
+      driverId: data.driverId,
+      deviceId: data.deviceId,
+    });
   }
 
   @SubscribeMessage('webrtc.call.hangup')

@@ -41,6 +41,13 @@ export class PodService {
       actor.role === 'DRIVER' ? actor.driverId : undefined,
     );
 
+    if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(stop.delivery.status)) {
+      throw new ConflictException({
+        code: 'INVALID_DELIVERY_STATE',
+        message: `Cannot submit POD while delivery is in state ${stop.delivery.status}`,
+      });
+    }
+
     if (stop.status === 'DELIVERED') {
       const existingPod = await this.prisma.proofOfDelivery.findUnique({
         where: { deliveryStopId: stopId },
@@ -83,7 +90,23 @@ export class PodService {
 
     // Process POD creation and stop status transition inside database transaction
     const podResult = await this.prisma.$transaction(async (tx: any) => {
-      // 1. Create ProofOfDelivery record
+      // Claim the stop only while its parent delivery is operational.
+      const claimed = await tx.deliveryStop.updateMany({
+        where: {
+          id: stopId,
+          status: { in: ['UNLOADING', 'ARRIVED'] },
+          delivery: { status: { notIn: ['COMPLETED', 'CANCELLED', 'FAILED'] } },
+        },
+        data: { status: 'DELIVERED', completedAt: new Date() },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: 'INVALID_DELIVERY_STATE',
+          message: 'Cannot submit POD after the delivery has become terminal',
+        });
+      }
+
+      // Create ProofOfDelivery record after claiming the stop.
       const pod = await tx.proofOfDelivery.create({
         data: {
           deliveryStopId: stopId,
@@ -96,16 +119,7 @@ export class PodService {
         },
       });
 
-      // 2. Update DeliveryStop status to DELIVERED
-      await tx.deliveryStop.update({
-        where: { id: stopId },
-        data: {
-          status: 'DELIVERED',
-          completedAt: new Date(),
-        },
-      });
-
-      // 3. Log DeliveryEvent
+      // Log DeliveryEvent
       await tx.deliveryEvent.create({
         data: {
           deliveryId: stop.deliveryId,

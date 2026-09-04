@@ -150,15 +150,15 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async isRevoked(key: string): Promise<boolean> {
+  async isRevoked(key: string): Promise<boolean | null> {
     if (!this.client || !this.isConnected) {
-      return false;
+      return null;
     }
     try {
       const exists = await this.client.exists(key);
       return exists === 1;
     } catch {
-      return false;
+      return null;
     }
   }
 

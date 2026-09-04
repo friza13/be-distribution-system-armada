@@ -82,9 +82,12 @@ export class WsRoomAuthorizerService {
       return { authorized: true, normalizedRoom };
     }
 
-    // Owner can access delivery if they created it or belong to tenant
+    // Until a tenant relation exists, owners are scoped to their own deliveries.
     if (role === 'OWNER') {
-      return { authorized: true, normalizedRoom };
+      if (delivery.createdBy === userId) {
+        return { authorized: true, normalizedRoom };
+      }
+      return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
     }
 
     // Driver can ONLY access delivery if assigned to them

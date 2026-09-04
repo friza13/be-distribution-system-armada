@@ -59,6 +59,25 @@ export class CallSessionService {
       );
     }
 
+    if (actor.role === 'OWNER' && dto.deliveryId) {
+      const delivery = await this.prisma.delivery.findUnique({
+        where: { id: dto.deliveryId },
+        select: { createdBy: true, driverId: true },
+      });
+      if (!delivery || delivery.createdBy !== actor.userId) {
+        throw new ForbiddenException({
+          code: 'RESOURCE_FORBIDDEN',
+          message: 'You are not authorized to initiate a call for this delivery',
+        });
+      }
+      if (delivery.driverId !== dto.driverId) {
+        throw new ConflictException({
+          code: 'DRIVER_DELIVERY_MISMATCH',
+          message: 'Call driver must be assigned to the requested delivery',
+        });
+      }
+    }
+
     const driver = await this.prisma.driver.findUnique({
       where: { id: dto.driverId },
       include: { user: true },
@@ -131,14 +150,11 @@ export class CallSessionService {
       });
     }
 
-    // IDOR Check: Callee Driver verification
-    if (actor.role === 'DRIVER') {
-      if (!actor.driverId || session.driverId !== actor.driverId) {
-        throw new ForbiddenException({
-          code: 'RESOURCE_FORBIDDEN',
-          message: 'You are not the designated recipient for this call session',
-        });
-      }
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
+      });
     }
 
     if (session.status !== 'PENDING') {
@@ -187,6 +203,13 @@ export class CallSessionService {
       });
     }
 
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
+      });
+    }
+
     if (session.status === 'ENDED') {
       return session;
     }
@@ -212,6 +235,42 @@ export class CallSessionService {
     this.broadcastCallEnded(session.id, 'USER_HANGUP', actor);
 
     return updated;
+  }
+
+  async authorizeSignal(sessionId: string, actor: UserActor) {
+    const session = await this.prisma.realtimeSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException({
+        code: 'CALL_SESSION_NOT_FOUND',
+        message: `Call session ${sessionId} not found`,
+      });
+    }
+
+    if (!this.isAuthorizedParticipant(session, actor)) {
+      throw new ForbiddenException({
+        code: 'RESOURCE_FORBIDDEN',
+        message: 'You are not a participant in this call session',
+      });
+    }
+
+    if (session.status !== 'ACTIVE' || session.expiresAt <= new Date()) {
+      throw new ConflictException({
+        code: 'INVALID_CALL_STATE',
+        message: `Cannot signal call in status ${session.status}`,
+      });
+    }
+
+    return session;
+  }
+
+  private isAuthorizedParticipant(session: { ownerId: string; driverId: string }, actor: UserActor): boolean {
+    if (actor.role === 'ADMIN' || actor.role === 'SUPER_ADMIN') {
+      return true;
+    }
+    return session.ownerId === actor.userId || (!!actor.driverId && session.driverId === actor.driverId);
   }
 
   private async handlePendingTimeout(sessionId: string) {
