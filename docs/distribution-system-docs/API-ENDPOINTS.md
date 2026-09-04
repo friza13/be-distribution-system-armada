@@ -69,9 +69,9 @@
 
 ---
 
-## 2. Complete Inventory of Runtime Endpoints (55 Endpoints)
+## 2. Complete Inventory of Runtime Endpoints (59 Endpoints)
 
-Below is the audited runtime inventory of all 55 REST endpoints enumerated directly from NestJS `@Controller()` definitions in `backend/src/modules/`:
+Below is the audited runtime inventory of all 59 REST endpoints enumerated directly from NestJS `@Controller()` definitions in `src/modules/`:
 
 | No | Method | Actual Runtime Path | Controller | Auth | Roles | Scope | Status |
 |:---:|:---:|:--- |:--- |:--- |:--- |:--- |:---:|
@@ -167,4 +167,4 @@ Below is the audited runtime inventory of all 55 REST endpoints enumerated direc
 2. `docs/distribution-system-docs/openapi/openapi.yaml` $\rightarrow$ Machine-Readable OpenAPI 3.0 Contract
 3. `docs/distribution-system-docs/api/*` $\rightarrow$ Domain-Specific Detailed Specifications
 4. `docs/distribution-system-docs/06-API-REALTIME.md` $\rightarrow$ WebSocket & Media Realtime Contract
-5. **Runtime NestJS Codebase (`backend/src/`)** $\rightarrow$ Absolute Final Source of Truth
+5. **Runtime NestJS Codebase (`src/`)** $\rightarrow$ Absolute Final Source of Truth

@@ -51,14 +51,15 @@ Client applications interact with this backend strictly through documented netwo
 
 ```text
 distribution-system-armada/
-├── backend/                              # NestJS Application Source & Configuration
-│   ├── src/                              # Domain Modules, Common Filters, Guards & Interceptors
-│   ├── prisma/                           # PostgreSQL + PostGIS Schema & Migrations
-│   ├── test/                             # Unit & E2E Automated Test Suites (48 suites, 202 tests)
-│   ├── storage/                          # Local Private Storage (POD uploads, git-ignored)
-│   ├── backups/                          # Encrypted Database Backup Directory
-│   ├── Dockerfile                        # Multi-stage production container build
-│   └── docker-compose.prod.yml           # Production Docker Stack (Postgres, Redis, Backend)
+├── src/                                  # NestJS Modular Monolith Application Source
+│   ├── modules/                          # Domain Modules (auth, deliveries, routes, etc.)
+│   ├── common/                           # Filters, Interceptors, Guards, Prisma, Redis
+│   └── config/                           # Configuration & Environment Validation
+├── prisma/                               # PostgreSQL + PostGIS Schema & Migrations
+├── test/                                 # Unit & E2E Automated Test Suites (51 suites, 227 tests)
+├── scripts/                              # Utility & Automation Scripts (backup, restore, smoke test)
+├── storage/                              # Local Private Storage (POD uploads, git-ignored)
+├── backups/                              # Encrypted Database Backup Directory (git-ignored)
 │
 ├── docs/                                 # Central Documentation Root
 │   ├── distribution-system-docs/         # Canonical System Architecture, Contracts & Handoffs
@@ -82,11 +83,12 @@ distribution-system-armada/
 │   ├── reports/                          # Audit & Verification Reports (Phase 0 - 18)
 │   └── superpowers/                      # Architecture Specs & Implementation Plans
 │
-├── scripts/                              # Utility & Automation Scripts
-│   ├── api-smoke-test.sh                 # Live REST API 59/59 Route Smoke Test
-│   ├── backup-db.sh                      # Encrypted PostgreSQL Backup Pipeline
-│   └── restore-db.sh                     # Decrypted PostgreSQL Restore Verification
-│
+├── Dockerfile                            # Multi-stage production container build
+├── docker-compose.yml                    # Development Docker Compose (PostgreSQL, Redis)
+├── docker-compose.prod.yml               # Production Docker Stack (Postgres, Redis, Backend)
+├── package.json                          # Node.js Dependencies & NPM Scripts
+├── package-lock.json                     # Pinned Dependency Lockfile
+├── tsconfig.json                         # TypeScript Configuration
 ├── TASK_BREAKDOWN_BE_SECURITY.md         # Master Task Breakdown & Execution Baseline
 └── .gitignore                            # Git Exclusion Rules
 ```
@@ -104,7 +106,6 @@ distribution-system-armada/
 ### Quick Start:
 ```bash
 # 1. Start Infrastructure Containers (PostgreSQL + PostGIS & Redis)
-cd backend
 docker compose up -d postgres redis
 
 # 2. Run Database Migrations & Generate Prisma Client
@@ -120,12 +121,10 @@ The API will be accessible at `http://localhost:3000/v1` and WebSocket at `ws://
 
 ## 5. Verification & Testing
 
-Execute the comprehensive test suites from `backend/`:
+Execute the comprehensive test suites directly from the project root:
 
 ```bash
-cd backend
-
-# Run Unit Tests (8 test suites, 48 tests)
+# Run Unit Tests (9 test suites, 73 tests)
 npm run test
 
 # Run End-to-End Integration Tests (42 test suites, 154 tests)

@@ -15,9 +15,9 @@ dist/
 build/
 coverage/
 
-# Upload Storage (Local Private Storage)
-backend/storage/
+# Upload Storage & Database Backups (Local Private)
 storage/
+backups/
 
 # IDE and OS
 .DS_Store

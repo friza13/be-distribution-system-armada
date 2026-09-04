@@ -36,20 +36,17 @@ gen_uuid() {
 }
 
 # Clear redis rate limits for local testing
-(
-  cd backend
-  node -e "
-    const Redis = require('ioredis');
-    const redis = new Redis(6379, 'localhost');
-    async function clear() {
-      const keys = await redis.keys('throttle:*');
-      if (keys.length > 0) await redis.del(...keys);
-      const revKeys = await redis.keys('revoked:*');
-      if (revKeys.length > 0) await redis.del(...revKeys);
-    }
-    clear().finally(() => redis.disconnect());
-  " >/dev/null 2>&1 || true
-)
+node -e "
+  const Redis = require('ioredis');
+  const redis = new Redis(6379, 'localhost');
+  async function clear() {
+    const keys = await redis.keys('throttle:*');
+    if (keys.length > 0) await redis.del(...keys);
+    const revKeys = await redis.keys('revoked:*');
+    if (revKeys.length > 0) await redis.del(...revKeys);
+  }
+  clear().finally(() => redis.disconnect());
+" >/dev/null 2>&1 || true
 
 echo "========================================================================="
 echo "  DMS CANONICAL REST API 100% ROUTE EXECUTION SMOKE TEST (59 ROUTES)"
@@ -148,39 +145,36 @@ DISP1_USER_ID=$(echo "$DISP1_LOGIN" | jq -r '.data.user.id // empty')
 DISP2_LOGIN=$(curl -s -X POST "$BASE_URL/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$DISPOSABLE_USER_2\",\"password\":\"DispPass123!\",\"clientType\":\"MOBILE\"}")
 DISP2_TOKEN=$(echo "$DISP2_LOGIN" | jq -r '.data.accessToken // empty')
 
-# Provision Driver Entity & Vehicle using Node.js script in backend directory
+# Provision Driver Entity & Vehicle using Node.js script
 VEHICLE_UUID=$(gen_uuid)
 DRIVER_ENTITY_ID=$(gen_uuid)
-(
-  cd backend
-  node -e "
-    const { PrismaClient } = require('./node_modules/@prisma/client');
-    const prisma = new PrismaClient();
-    async function main() {
-      await prisma.driver.upsert({
-        where: { userId: '$DRIVER_USER_ID' },
-        update: {},
-        create: {
-          id: '$DRIVER_ENTITY_ID',
-          userId: '$DRIVER_USER_ID',
-          employeeCode: 'DRV-$TS',
-          displayName: 'Driver Smoke Test',
-          phone: '$PHONE_DRV',
-          operationalStatus: 'AVAILABLE'
-        }
-      });
-      await prisma.vehicle.create({
-        data: {
-          id: '$VEHICLE_UUID',
-          plateNumber: 'B $TS MVP',
-          vehicleType: 'VAN',
-          capacityWeightKg: 1000.0
-        }
-      });
-    }
-    main().finally(() => prisma.\$disconnect());
-  "
-)
+node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const prisma = new PrismaClient();
+  async function main() {
+    await prisma.driver.upsert({
+      where: { userId: '$DRIVER_USER_ID' },
+      update: {},
+      create: {
+        id: '$DRIVER_ENTITY_ID',
+        userId: '$DRIVER_USER_ID',
+        employeeCode: 'DRV-$TS',
+        displayName: 'Driver Smoke Test',
+        phone: '$PHONE_DRV',
+        operationalStatus: 'AVAILABLE'
+      }
+    });
+    await prisma.vehicle.create({
+      data: {
+        id: '$VEHICLE_UUID',
+        plateNumber: 'B $TS MVP',
+        vehicleType: 'VAN',
+        capacityWeightKg: 1000.0
+      }
+    });
+  }
+  main().finally(() => prisma.\$disconnect());
+" >/dev/null 2>&1 || true
 
 # Re-login Driver so user.driverId is attached in JWT claims
 DRIVER_LOGIN=$(curl -s -X POST "$BASE_URL/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$DRIVER_USER\",\"password\":\"DriverPass123!\",\"clientType\":\"MOBILE\"}")

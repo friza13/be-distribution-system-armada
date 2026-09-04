@@ -231,7 +231,7 @@ Pengamanan transport autentikasi browser Admin Web tidak mengandalkan satu heade
 - **Estimasi:** 1.5 Hari (Design: 2h, Impl: 6h, Test: 2h, Review: 2h)
 - **Dependensi:** None
 - **Fase:** Phase 0
-- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `backend/src/app.module.ts`, `backend/src/config/configuration.ts`)
+- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `src/app.module.ts`, `src/config/configuration.ts`)
 - **Test Evidence:** `test/api-envelope.e2e-spec.ts` (PASS)
 - **Output:** Base codebase NestJS, `tsconfig.json`, modular layout, `src/config/configuration.ts`.
 - **Definition of Done:** Server NestJS dapat booting dengan `npm run start:dev`, environment variable tervalidasi saat startup (gagal jika env wajib hilang), struktur modul terpisah rapi tanpa circular dependency.
@@ -246,7 +246,7 @@ Pengamanan transport autentikasi browser Admin Web tidak mengandalkan satu heade
 - **Estimasi:** 1 Hari (Design: 2h, Impl: 4h, Test: 2h)
 - **Dependensi:** `BE-CORE-001`
 - **Fase:** Phase 0
-- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `backend/src/common/filters/global-exception.filter.ts`, `backend/src/common/middleware/request-id.middleware.ts`)
+- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `src/common/filters/global-exception.filter.ts`, `src/common/middleware/request-id.middleware.ts`)
 - **Test Evidence:** `test/correlation-id.e2e-spec.ts`, `test/api-envelope.e2e-spec.ts` (PASS)
 - **Output:** `GlobalExceptionFilter`, `TransformInterceptor`, `RequestIdMiddleware`.
 - **Definition of Done:** Seluruh response sukses dan error mengembalikan format envelope yang seragam; database error atau stack trace internal tidak pernah bocor ke client pada environment `production`.
@@ -261,7 +261,7 @@ Pengamanan transport autentikasi browser Admin Web tidak mengandalkan satu heade
 - **Estimasi:** 2 Hari (Spike: 10h, Benchmark: 4h, Decision Record: 2h)
 - **Dependensi:** `BE-CORE-001`
 - **Fase:** Phase 0
-- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `docs/adr/ADR-001-DATABASE-AND-ORM-STRATEGY.md`, `backend/prisma/schema.prisma`)
+- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `docs/adr/ADR-001-DATABASE-AND-ORM-STRATEGY.md`, `prisma/schema.prisma`)
 - **Test Evidence:** `test/database/relational-integrity.e2e-spec.ts` (PASS)
 - **Output:** Dokumen `ADR-001-ORM-SELECTION.md` dan prototype query PostGIS.
 - **Definition of Done:** Keputusan final ORM tercatat di Architecture Decision Record dengan bukti pengujian query spasial (`ST_DWithin`, `ST_Distance`) dan script migrasi otomatis.
@@ -280,7 +280,7 @@ Pengamanan transport autentikasi browser Admin Web tidak mengandalkan satu heade
 - **Estimasi:** 1.5 Hari (Design: 3h, Impl: 6h, Test: 3h)
 - **Dependensi:** `BE-CORE-002`
 - **Fase:** Phase 0
-- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `backend/src/main.ts`, `backend/test/mass-assignment.e2e-spec.ts`)
+- **Status Audited:** ✅ IMPLEMENTED / VERIFIED (Location: `src/main.ts`, `test/mass-assignment.e2e-spec.ts`)
 - **Test Evidence:** `test/mass-assignment.e2e-spec.ts`, `test/request-limits.e2e-spec.ts` (PASS)
 - **Output:** Konfigurasi Global Validation Pipe di `main.ts`, base pagination DTO, custom validation decorators.
 - **Definition of Done:** Injection field liar (misal: mengirim `{ role: "ADMIN" }` saat registrasi) ditolak otomatis; request payload JSON > 100 KB langsung diputus oleh body parser (HTTP 413 Payload Too Large).

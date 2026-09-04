@@ -68,12 +68,12 @@
 
 ## 3. Docker & Docker Compose Specification
 
-### 3.1 Multi-Stage `Dockerfile` (`backend/Dockerfile`)
+### 3.1 Multi-Stage `Dockerfile` (`Dockerfile`)
 - **Stage 1 (Builder):** Uses `node:22-alpine`, installs dependencies, runs `npx prisma generate`, compiles TypeScript (`npm run build`).
 - **Stage 2 (Production Runner):** Uses `node:22-alpine`, copies production `node_modules` and compiled `dist/`, runs as non-root user `USER node`.
 - **Healthcheck:** Defined via `CMD wget --no-verbose --tries=1 --spider http://localhost:3000/v1/health/liveness || exit 1`.
 
-### 3.2 Production Compose (`backend/docker-compose.prod.yml`)
+### 3.2 Production Compose (`docker-compose.prod.yml`)
 - PostgreSQL, Redis, and Backend services configured with `restart: unless-stopped`.
 - PostgreSQL healthcheck: `pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}`.
 - Redis healthcheck: `redis-cli ping`.
@@ -83,7 +83,7 @@
 
 ## 4. Complete Environment Variables Matrix
 
-All environment variables verified from `backend/src/config/configuration.ts` and `docker-compose.prod.yml`:
+All environment variables verified from `src/config/configuration.ts` and `docker-compose.prod.yml`:
 
 | Variable Name | Required | Target Service | Secret? | Default / Example Value | Description |
 |:--- |:---:|:--- |:---:|:--- |:--- |
@@ -245,7 +245,7 @@ Repository includes verified shell scripts in `scripts/`:
 
 ### Verification Evidence:
 - **Repository HEAD Commit:** `840dfd6`
-- **Audited Files:** `backend/Dockerfile`, `backend/docker-compose.prod.yml`, `backend/nginx/nginx.conf`, `scripts/backup-db.sh`, `scripts/restore-db.sh`, `backend/src/modules/health/health.controller.ts`.
+- **Audited Files:** `Dockerfile`, `docker-compose.prod.yml`, `nginx/nginx.conf`, `scripts/backup-db.sh`, `scripts/restore-db.sh`, `src/modules/health/health.controller.ts`.
 - **Unit Test Evidence:** `test/deployment/deployment-stack.spec.ts` (PASS), `test/storage/storage-backup.spec.ts` (PASS).
 - **Compilation Status:** `npm run build` exit code 0.
 
