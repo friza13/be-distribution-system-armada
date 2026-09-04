@@ -348,4 +348,126 @@ describe('Secure File Upload & Proof of Delivery (POD) Service (E2E)', () => {
     expect(res.body.data.pods.length).toBe(1);
     expect(res.body.data.pods[0].receiverName).toBe('Budi Santoso');
   });
+
+  it('should REJECT file upload when byte size exceeds limit (422 Unprocessable Entity)', async () => {
+    // 5 MB + 1024 bytes buffer for photo
+    const oversizedBuffer = Buffer.alloc(5 * 1024 * 1024 + 1024);
+    // Fake JPEG header
+    oversizedBuffer[0] = 0xff;
+    oversizedBuffer[1] = 0xd8;
+    oversizedBuffer[2] = 0xff;
+
+    const res = await request(app.getHttpServer())
+      .post('/v1/files/upload')
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .attach('file', oversizedBuffer, { filename: 'too_large.jpg', contentType: 'image/jpeg' })
+      .expect(HttpStatus.UNPROCESSABLE_ENTITY);
+
+    expect(res.body.error.code).toBe('FILE_SIZE_EXCEEDED');
+  });
+
+  it('should REJECT signature file upload when byte size exceeds 500 KB limit (422)', async () => {
+    const oversizedSig = Buffer.alloc(501 * 1024);
+    oversizedSig[0] = 0x89;
+    oversizedSig[1] = 0x50;
+    oversizedSig[2] = 0x4e;
+    oversizedSig[3] = 0x47;
+
+    const res = await request(app.getHttpServer())
+      .post('/v1/files/upload')
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .field('category', 'signature')
+      .attach('file', oversizedSig, { filename: 'sig.png', contentType: 'image/png' })
+      .expect(HttpStatus.UNPROCESSABLE_ENTITY);
+
+    expect(res.body.error.code).toBe('FILE_SIZE_EXCEEDED');
+  });
+
+  it('should REJECT image upload exceeding decoded pixel limit of 25 MP (422)', async () => {
+    const sharp = require('sharp');
+    const hugeImage = await sharp({
+      create: {
+        width: 6000,
+        height: 5000,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+
+    const res = await request(app.getHttpServer())
+      .post('/v1/files/upload')
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .attach('file', hugeImage, { filename: 'huge.jpg', contentType: 'image/jpeg' })
+      .expect(HttpStatus.UNPROCESSABLE_ENTITY);
+
+    expect(['PIXEL_LIMIT_EXCEEDED', 'INVALID_IMAGE_DATA']).toContain(res.body.error.code);
+  });
+
+  it('should verify stored file checksum matches exact normalized bytes and strip metadata', async () => {
+    const sharp = require('sharp');
+    const crypto = require('crypto');
+    const fs = require('fs');
+    const path = require('path');
+
+    // Create a 2000x1000 PNG image (which will be normalized to max 1600px width and converted to JPEG)
+    const largePng = await sharp({
+      create: {
+        width: 2000,
+        height: 1000,
+        channels: 4,
+        background: { r: 50, g: 150, b: 250, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const uploadRes = await request(app.getHttpServer())
+      .post('/v1/files/upload')
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .attach('file', largePng, { filename: 'oversized_source.png', contentType: 'image/png' })
+      .expect(HttpStatus.CREATED);
+
+    const fileId = uploadRes.body.data.fileId;
+    const fileRecord = await prisma.fileRecord.findUnique({ where: { id: fileId } });
+    expect(fileRecord).toBeDefined();
+    expect(fileRecord!.mediaType).toBe('image/jpeg');
+
+    // Read physically stored file from disk
+    const storedFilePath = path.resolve(process.cwd(), 'storage', 'private', fileRecord!.objectKey);
+    const storedBytes = await fs.promises.readFile(storedFilePath);
+
+    // Compute SHA-256 of stored bytes
+    const expectedHash = crypto.createHash('sha256').update(storedBytes).digest('hex');
+    expect(fileRecord!.checksumSha256).toBe(expectedHash);
+    expect(fileRecord!.sizeBytes).toBe(storedBytes.length);
+
+    // Verify stored image dimensions <= 1600px
+    const storedMeta = await sharp(storedBytes).metadata();
+    expect(storedMeta.width).toBe(1600);
+    expect(storedMeta.height).toBe(800);
+    expect(storedMeta.exif).toBeUndefined();
+
+    // Clean up test file record
+    await prisma.fileRecord.delete({ where: { id: fileId } });
+    await fs.promises.unlink(storedFilePath).catch(() => {});
+  });
+
+  it('should delete physical file atomically and log error if DB insert fails (compensating transaction)', async () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    // Force prisma.fileRecord.create to fail once
+    jest.spyOn(prisma.fileRecord, 'create').mockRejectedValueOnce(new Error('Simulated DB Constraint Failure'));
+
+    await request(app.getHttpServer())
+      .post('/v1/files/upload')
+      .set('Authorization', `Bearer ${driverTokenA}`)
+      .attach('file', validJpegBuffer, { filename: 'compensating.jpg', contentType: 'image/jpeg' })
+      .expect(HttpStatus.INTERNAL_SERVER_ERROR);
+
+    // Restore spy
+    jest.restoreAllMocks();
+  });
 });

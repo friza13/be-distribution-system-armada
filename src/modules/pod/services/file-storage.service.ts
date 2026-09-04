@@ -133,7 +133,13 @@ export class FileStorageService {
       this.logger.error(
         `Failed to create FileRecord for ${saved.objectKey}, executing compensating file deletion`,
       );
-      await this.localStorageAdapter.deleteFile(saved.objectKey).catch(() => {});
+      try {
+        await this.localStorageAdapter.deleteFile(saved.objectKey);
+      } catch (cleanupErr) {
+        this.logger.error(
+          `Critical storage compensation failure: Could not delete orphaned physical file ${saved.objectKey}: ${(cleanupErr as Error)?.message || cleanupErr}`,
+        );
+      }
       throw dbError;
     }
   }

@@ -205,5 +205,83 @@ describe('ImageNormalizerService (Unit Tests)', () => {
         expect(res.mimeType).toBe('image/jpeg');
       });
     });
+
+    it('11. should strip EXIF/IPTC/XMP metadata and correctly apply EXIF orientation', async () => {
+      // Create a 600x400 image with EXIF orientation 6 (90 degrees CW) and metadata
+      const sourceWithExif = await sharp({
+        create: {
+          width: 600,
+          height: 400,
+          channels: 3,
+          background: { r: 120, g: 80, b: 40 },
+        },
+      })
+        .withMetadata({
+          orientation: 6,
+          exif: {
+            IFD0: {
+              Make: 'TestCameraVendor',
+              Model: 'TestModelX',
+            },
+          },
+        })
+        .jpeg()
+        .toBuffer();
+
+      const beforeMeta = await sharp(sourceWithExif).metadata();
+      expect(beforeMeta.orientation).toBe(6);
+      expect(beforeMeta.exif).toBeDefined();
+
+      const result = await service.normalizePodPhoto(sourceWithExif, 'image/jpeg');
+
+      expect(result.isNormalized).toBe(true);
+      const afterMeta = await sharp(result.buffer).metadata();
+      // Orientation rotated: width and height swapped (400x600), orientation tag removed/reset
+      expect(afterMeta.width).toBe(400);
+      expect(afterMeta.height).toBe(600);
+      expect(afterMeta.orientation).toBeUndefined();
+      expect(afterMeta.exif).toBeUndefined();
+      expect(afterMeta.iptc).toBeUndefined();
+      expect(afterMeta.xmp).toBeUndefined();
+    });
+
+    it('12. should preserve WebP signature alpha transparency and normalize to PNG', async () => {
+      const webpSig = await sharp({
+        create: {
+          width: 500,
+          height: 250,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        },
+      })
+        .webp()
+        .toBuffer();
+
+      const result = await service.normalizeSignature(webpSig, 'image/webp');
+
+      expect(result.mimeType).toBe('image/png');
+      expect(result.extension).toBe('.png');
+      const meta = await sharp(result.buffer).metadata();
+      expect(meta.format).toBe('png');
+      expect(meta.hasAlpha).toBe(true);
+      expect(meta.width).toBe(500);
+      expect(meta.height).toBe(250);
+      expect(meta.exif).toBeUndefined();
+    });
+
+    it('13. should reject signature exceeding decoded pixel limit of 25 MP', async () => {
+      const hugeSig = await sharp({
+        create: {
+          width: 5100,
+          height: 5000,
+          channels: 4,
+          background: { r: 255, g: 255, b: 255, alpha: 0 },
+        },
+      })
+        .png()
+        .toBuffer();
+
+      await expect(service.normalizeSignature(hugeSig, 'image/png')).rejects.toThrow();
+    });
   });
 });

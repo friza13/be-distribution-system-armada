@@ -36,9 +36,13 @@ export class ImageNormalizerService {
   private readonly queue: Array<() => void> = [];
 
   constructor() {
-    // Configure Sharp global cache limits for Staging VPS (2 GB RAM / 2 vCPU)
+    // Configure Sharp global cache and concurrency limits for Staging VPS (2 GB RAM / 2 vCPU)
     if (typeof sharp.cache === 'function') {
       sharp.cache({ memory: 50, files: 20, items: 100 });
+    }
+    if (typeof sharp.concurrency === 'function') {
+      // Bound libvips internal thread pool to 2 threads to prevent CPU/memory saturation on 2 GB RAM VPS
+      sharp.concurrency(2);
     }
   }
 
