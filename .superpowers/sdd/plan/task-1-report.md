@@ -120,3 +120,19 @@ The tenant/company schema requirement remains explicitly deferred as requested. 
 - Unit suite: `npm test -- --runInBand` — 8 suites, 68 tests passed.
 - Build: `npm run build` — passed.
 - Relevant e2e: `npm run test:e2e -- --runInBand test/deliveries/pod-upload.e2e-spec.ts test/deliveries/stop-lifecycle.e2e-spec.ts test/communication/webrtc-session.e2e-spec.ts test/communication/ws-webrtc-signaling.e2e-spec.ts test/realtime/ws-instant-revocation.e2e-spec.ts test/realtime/ws-room-authorization.e2e-spec.ts` — 6 suites, 30 tests passed.
+
+
+## Remaining re-review fixes — 2026-09-04
+
+Fixed the two remaining re-review issues without changing the tenant schema or generated artifacts:
+
+- WebSocket handshake authentication now preserves the original access-token `exp` claim in socket auth data. Sensitive-operation revalidation rejects sockets once that original JWT expiry is reached, independently of the database session expiry.
+- POD idempotency claims and response persistence now occur inside the same Prisma transaction as stop/POD creation. A concurrent same-key retry that loses the unique claim race fetches and replays the committed original response instead of surfacing a terminal-state 409.
+
+### Validation
+
+- Focused regressions: `./node_modules/.bin/jest --config ./test/jest-unit.json test/security/logic-code-fixes.spec.ts --runInBand -t 'original JWT expiry|concurrent retries'` — 2 passed.
+- Focused security/logic suite: `./node_modules/.bin/jest --config ./test/jest-unit.json test/security/logic-code-fixes.spec.ts --runInBand` — 25 passed.
+- Unit suite: `npm test -- --runInBand` — 8 suites, 70 tests passed.
+- Build: `npm run build` — passed.
+- Relevant e2e: `npm run test:e2e -- --runInBand test/deliveries/pod-upload.e2e-spec.ts test/realtime/ws-auth-handshake.e2e-spec.ts test/realtime/ws-instant-revocation.e2e-spec.ts test/realtime/ws-room-authorization.e2e-spec.ts` — 4 suites, 30 tests passed.

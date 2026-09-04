@@ -13,6 +13,7 @@ export interface AuthenticatedSocketData {
   permissions: string[];
   deviceId: string;
   sessionId: string;
+  accessTokenExp: number;
   driverId: string | null;
   connectedAt: Date;
   joinedRooms: Set<string>;
@@ -125,7 +126,7 @@ export class WsJwtAuthGuard implements CanActivate {
       throw new Error('UNAUTHORIZED: Invalid token type');
     }
 
-    if (!payload.sessionId || !payload.sub || !payload.deviceId) {
+    if (!payload.sessionId || !payload.sub || !payload.deviceId || !Number.isFinite(payload.exp)) {
       throw new Error('UNAUTHORIZED: Incomplete token claims');
     }
 
@@ -205,6 +206,7 @@ export class WsJwtAuthGuard implements CanActivate {
       permissions,
       deviceId: payload.deviceId,
       sessionId: payload.sessionId,
+      accessTokenExp: payload.exp,
       driverId: user.driver?.id || null,
       connectedAt: new Date(),
       joinedRooms: new Set<string>(),
@@ -218,6 +220,10 @@ export class WsJwtAuthGuard implements CanActivate {
     const data = socket.data as AuthenticatedSocketData;
     if (!data?.userId || !data.sessionId || !data.deviceId) {
       throw new Error('UNAUTHORIZED: Authentication context required');
+    }
+
+    if (!Number.isFinite(data.accessTokenExp) || data.accessTokenExp <= Math.floor(Date.now() / 1000)) {
+      throw new Error('UNAUTHORIZED: Access token expired');
     }
 
     const [session, user, isSessionRevoked, isUserRevoked] = await Promise.all([

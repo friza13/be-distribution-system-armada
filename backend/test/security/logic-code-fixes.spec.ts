@@ -1,4 +1,5 @@
 import { ConflictException, ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
+import * as jwt from 'jsonwebtoken';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { JwtStrategy } from '../../src/modules/auth/strategies/jwt.strategy';
 import { SessionService } from '../../src/modules/sessions/session.service';
@@ -8,6 +9,7 @@ import { DeliveriesService } from '../../src/modules/deliveries/services/deliver
 import { PodService } from '../../src/modules/pod/services/pod.service';
 import { RoutesDomainService } from '../../src/modules/routes/services/routes-domain.service';
 import { WsRoomAuthorizerService } from '../../src/modules/realtime/services/ws-room-authorizer.service';
+import { WsJwtAuthGuard } from '../../src/modules/realtime/guards/ws-jwt-auth.guard';
 import { RealtimeGateway } from '../../src/modules/realtime/gateways/realtime.gateway';
 import { RedisService } from '../../src/common/redis/redis.service';
 import { WsConnectionManagerService } from '../../src/modules/realtime/services/ws-connection-manager.service';
@@ -225,6 +227,140 @@ describe('approved security and logic fixes', () => {
     await expect(service.submitPod('stop-1', { receiverName: 'New receiver', idempotencyKey: 'new-key' } as any, {
       userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1',
     })).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('preserves the original JWT expiry and rejects sensitive socket revalidation after it expires', async () => {
+    const secret = 'test_secret_with_minimum_32_characters_length_here';
+    const config = {
+      get: jest.fn((key: string, fallback: string) => {
+        if (key === 'jwt.secretOrKey') return secret;
+        if (key === 'jwt.issuer') return 'dms-api';
+        if (key === 'jwt.audience') return 'dms-clients';
+        return fallback;
+      }),
+    };
+    const prisma = {
+      session: {
+        findUnique: jest.fn().mockResolvedValue({
+          userId: 'user-1',
+          deviceId: 'device-1',
+          isRevoked: false,
+          expiresAt: new Date(Date.now() + 60_000),
+          device: { userId: 'user-1', status: 'ACTIVE' },
+        }),
+      },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          username: 'user',
+          status: 'ACTIVE',
+          role: { code: 'DRIVER', rolePermissions: [] },
+          driver: null,
+        }),
+      },
+    };
+    const redis = { isRevoked: jest.fn().mockResolvedValue(false) };
+    const guard = new WsJwtAuthGuard(config as any, prisma as any, redis as any);
+    const token = jwt.sign(
+      {
+        sub: 'user-1',
+        role: 'DRIVER',
+        deviceId: 'device-1',
+        sessionId: 'session-1',
+        type: 'ACCESS_TOKEN',
+      },
+      secret,
+      { algorithm: 'HS256', expiresIn: '1h', issuer: 'dms-api', audience: 'dms-clients' },
+    );
+    const socket = { handshake: { auth: { token } }, data: {} } as any;
+
+    const socketData = await guard.validateHandshake(socket);
+
+    expect((socketData as any).accessTokenExp).toBeGreaterThan(Math.floor(Date.now() / 1000));
+
+    (socketData as any).accessTokenExp = Math.floor(Date.now() / 1000) - 1;
+    await expect(guard.validateSocket(socket)).rejects.toThrow('UNAUTHORIZED: Access token expired');
+  });
+
+  it('replays the original POD response for concurrent retries whose idempotency claim wins first', async () => {
+    const stop = {
+      id: 'stop-1',
+      deliveryId: 'delivery-1',
+      status: 'ARRIVED',
+      completedAt: null,
+      delivery: { id: 'delivery-1', driverId: 'driver-1', status: 'EN_ROUTE' },
+    };
+    const actor = { userId: 'driver-user', role: 'DRIVER', driverId: 'driver-1' };
+    const idempotencyKey = '00000000-0000-4000-8000-000000000003';
+    let stopStatus = 'ARRIVED';
+    let record: any = null;
+    let releaseSecondConflict!: () => void;
+    const secondConflict = new Promise<void>((resolve) => { releaseSecondConflict = resolve; });
+    let transactionTail = Promise.resolve();
+
+    const tx = {
+      idempotencyRecord: {
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          if (record) throw { code: 'P2002' };
+          record = { responseBody: data.responseBody };
+        }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => {
+          record.responseBody = data.responseBody;
+        }),
+      },
+      deliveryStop: {
+        updateMany: jest.fn().mockImplementation(async () => {
+          if (stopStatus !== 'ARRIVED') {
+            releaseSecondConflict();
+            return { count: 0 };
+          }
+          stopStatus = 'DELIVERED';
+          return { count: 1 };
+        }),
+      },
+      proofOfDelivery: {
+        create: jest.fn().mockResolvedValue({
+          id: 'pod-1',
+          completedAt: new Date('2026-09-04T00:00:00.000Z'),
+        }),
+      },
+      deliveryEvent: { create: jest.fn() },
+    };
+    const prisma = {
+      idempotencyRecord: {
+        findUnique: jest.fn().mockImplementation(async () => record),
+        create: jest.fn().mockImplementation(async ({ data }: any) => {
+          await secondConflict;
+          record = { responseBody: data.responseBody };
+        }),
+      },
+      $transaction: jest.fn(async (callback: (client: any) => Promise<unknown>) => {
+        const previous = transactionTail;
+        let release!: () => void;
+        transactionTail = new Promise<void>((resolve) => { release = resolve; });
+        await previous;
+        try {
+          return await callback(tx);
+        } finally {
+          release();
+        }
+      }),
+    };
+    const service = new PodService(
+      prisma as any,
+      {} as any,
+      { getStopAndVerifyDriver: jest.fn().mockResolvedValue(stop) } as any,
+      { completeDeliveryIfEligible: jest.fn() } as any,
+    );
+
+    const results: any[] = await Promise.all([
+      service.submitPod('stop-1', { receiverName: 'Receiver', idempotencyKey } as any, actor),
+      service.submitPod('stop-1', { receiverName: 'Receiver', idempotencyKey } as any, actor),
+    ]);
+
+    expect(results.map((result) => result.podId)).toEqual(['pod-1', 'pod-1']);
+    expect(results.filter((result) => result.idempotent)).toHaveLength(1);
+    expect(tx.proofOfDelivery.create).toHaveBeenCalledTimes(1);
   });
 
   it('extends the WebRTC session lifetime when an invite is accepted', async () => {
