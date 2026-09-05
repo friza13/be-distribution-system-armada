@@ -8,7 +8,7 @@ rm -f "$COOKIE_JAR"
 PASSED_COUNT=0
 FAILED_COUNT=0
 SKIPPED_COUNT=0
-TOTAL_ROUTES=59
+TOTAL_ROUTES=64
 
 record_route() {
   local num="$1"
@@ -102,7 +102,7 @@ else
 fi
 
 # Route 4: POST /v1/auth/register
-RESP_4=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$ADMIN_USER\",\"password\":\"AdminPass123!\",\"phone\":\"$PHONE_ADM\",\"roleCode\":\"ADMIN\"}")
+RESP_4=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$ADMIN_USER\",\"password\":\"AdminPass123!\",\"phone\":\"$PHONE_ADM\"}")
 HTTP_4=$(echo "$RESP_4" | tail -n1)
 BODY_4=$(echo "$RESP_4" | head -n-1)
 if ([ "$HTTP_4" = "201" ] || [ "$HTTP_4" = "200" ]) && echo "$BODY_4" | jq -e '.success == true' >/dev/null 2>&1; then
@@ -112,10 +112,27 @@ else
 fi
 
 # Register other test users
-curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$OWNER_USER\",\"password\":\"OwnerPass123!\",\"phone\":\"$PHONE_OWN\",\"roleCode\":\"OWNER\"}" >/dev/null
-curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DRIVER_USER\",\"password\":\"DriverPass123!\",\"phone\":\"$PHONE_DRV\",\"roleCode\":\"DRIVER\"}" >/dev/null
-curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DISPOSABLE_USER_1\",\"password\":\"DispPass123!\",\"phone\":\"$PHONE_DSP1\",\"roleCode\":\"DRIVER\"}" >/dev/null
-curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DISPOSABLE_USER_2\",\"password\":\"DispPass123!\",\"phone\":\"$PHONE_DSP2\",\"roleCode\":\"DRIVER\"}" >/dev/null
+curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$OWNER_USER\",\"password\":\"OwnerPass123!\",\"phone\":\"$PHONE_OWN\"}" >/dev/null
+curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DRIVER_USER\",\"password\":\"DriverPass123!\",\"phone\":\"$PHONE_DRV\"}" >/dev/null
+curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DISPOSABLE_USER_1\",\"password\":\"DispPass123!\",\"phone\":\"$PHONE_DSP1\"}" >/dev/null
+curl -s -X POST "$BASE_URL/auth/register" -H "Content-Type: application/json" -d "{\"username\":\"$DISPOSABLE_USER_2\",\"password\":\"DispPass123!\",\"phone\":\"$PHONE_DSP2\"}" >/dev/null
+
+# Activate test users & assign roles
+node -e "
+  const { PrismaClient } = require('@prisma/client');
+  const prisma = new PrismaClient();
+  async function activate() {
+    const adminRole = await prisma.role.findUnique({ where: { code: 'ADMIN' } });
+    const ownerRole = await prisma.role.findUnique({ where: { code: 'OWNER' } });
+    await prisma.user.updateMany({
+      where: { username: { in: ['$ADMIN_USER', '$OWNER_USER', '$DRIVER_USER', '$DISPOSABLE_USER_1', '$DISPOSABLE_USER_2'] } },
+      data: { status: 'ACTIVE' }
+    });
+    if (adminRole) await prisma.user.update({ where: { username: '$ADMIN_USER' }, data: { roleId: adminRole.id } });
+    if (ownerRole) await prisma.user.update({ where: { username: '$OWNER_USER' }, data: { roleId: ownerRole.id } });
+  }
+  activate().finally(() => prisma.\$disconnect());
+" >/dev/null 2>&1 || true
 
 # Route 5: POST /v1/auth/login
 RESP_5=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/auth/login" -H "Content-Type: application/json" -d "{\"username\":\"$ADMIN_USER\",\"password\":\"AdminPass123!\",\"clientType\":\"MOBILE\"}")
@@ -392,6 +409,57 @@ else
   record_route 25 "POST" "/v1/deliveries/:id/start" "$HTTP_25" "" "FAIL" "$BODY_25"
 fi
 
+# --- 8. Routes Subsystem (Routes 32-36) [Executed while delivery is operational] ---
+# Route 32: POST /v1/deliveries/:id/routes/recommend
+RESP_32=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/deliveries/$DELIVERY_ID/routes/recommend" -H "Authorization: Bearer $OWNER_TOKEN")
+HTTP_32=$(echo "$RESP_32" | tail -n1)
+BODY_32=$(echo "$RESP_32" | head -n-1)
+if [ "$HTTP_32" = "200" ] && echo "$BODY_32" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 32 "POST" "/v1/deliveries/:id/routes/recommend" "$HTTP_32" "recommendation returned" "PASS"
+else
+  record_route 32 "POST" "/v1/deliveries/:id/routes/recommend" "$HTTP_32" "" "FAIL" "$BODY_32"
+fi
+
+# Route 33: POST /v1/deliveries/:id/routes/select
+RESP_33=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/deliveries/$DELIVERY_ID/routes/select" -H "Authorization: Bearer $OWNER_TOKEN" -H "Content-Type: application/json" -d "{\"source\":\"RECOMMENDED_2OPT\",\"recommendedSequence\":[\"$STOP_1\",\"$STOP_2\"],\"totalDistanceMeters\":1000,\"estimatedDurationSeconds\":120}")
+HTTP_33=$(echo "$RESP_33" | tail -n1)
+BODY_33=$(echo "$RESP_33" | head -n-1)
+if [ "$HTTP_33" = "200" ] || [ "$HTTP_33" = "201" ]; then
+  record_route 33 "POST" "/v1/deliveries/:id/routes/select" "$HTTP_33" "route selected" "PASS"
+else
+  record_route 33 "POST" "/v1/deliveries/:id/routes/select" "$HTTP_33" "" "FAIL" "$BODY_33"
+fi
+
+# Route 34: PATCH /v1/deliveries/:id/routes/reorder
+RESP_34=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE_URL/deliveries/$DELIVERY_ID/routes/reorder" -H "Authorization: Bearer $OWNER_TOKEN" -H "Content-Type: application/json" -d "{\"stopSequence\":[{\"deliveryStopId\":\"$STOP_1\",\"sequence\":2},{\"deliveryStopId\":\"$STOP_2\",\"sequence\":1}]}")
+HTTP_34=$(echo "$RESP_34" | tail -n1)
+BODY_34=$(echo "$RESP_34" | head -n-1)
+if [ "$HTTP_34" = "200" ] && echo "$BODY_34" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 34 "PATCH" "/v1/deliveries/:id/routes/reorder" "$HTTP_34" "route reordered" "PASS"
+else
+  record_route 34 "PATCH" "/v1/deliveries/:id/routes/reorder" "$HTTP_34" "" "FAIL" "$BODY_34"
+fi
+
+# Route 35: GET /v1/deliveries/:id/routes/current
+RESP_35=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $OWNER_TOKEN" "$BASE_URL/deliveries/$DELIVERY_ID/routes/current")
+HTTP_35=$(echo "$RESP_35" | tail -n1)
+BODY_35=$(echo "$RESP_35" | head -n-1)
+if [ "$HTTP_35" = "200" ] && echo "$BODY_35" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 35 "GET" "/v1/deliveries/:id/routes/current" "$HTTP_35" "current route fetched" "PASS"
+else
+  record_route 35 "GET" "/v1/deliveries/:id/routes/current" "$HTTP_35" "" "FAIL" "$BODY_35"
+fi
+
+# Route 36: GET /v1/deliveries/:id/routes/versions
+RESP_36=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $OWNER_TOKEN" "$BASE_URL/deliveries/$DELIVERY_ID/routes/versions")
+HTTP_36=$(echo "$RESP_36" | tail -n1)
+BODY_36=$(echo "$RESP_36" | head -n-1)
+if [ "$HTTP_36" = "200" ] && echo "$BODY_36" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 36 "GET" "/v1/deliveries/:id/routes/versions" "$HTTP_36" "versions list returned" "PASS"
+else
+  record_route 36 "GET" "/v1/deliveries/:id/routes/versions" "$HTTP_36" "" "FAIL" "$BODY_36"
+fi
+
 # --- 7. Stops Lifecycle (Routes 27-31) & POD submission ---
 # Route 27: POST /v1/me/stops/:id/depart
 RESP_27=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/me/stops/$STOP_1/depart" -H "Authorization: Bearer $DRIVER_TOKEN")
@@ -435,7 +503,12 @@ fi
 
 # Route 41: POST /v1/files/upload
 TEMP_IMG="/tmp/test_pod_img.jpg"
-echo -n -e '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x01\x00\x48\x00\x48\x00\x00\xFF\xD9' > "$TEMP_IMG"
+node -e "
+  const sharp = require('sharp');
+  sharp({ create: { width: 100, height: 100, channels: 3, background: { r: 255, g: 0, b: 0 } } })
+    .jpeg()
+    .toFile('$TEMP_IMG');
+" >/dev/null 2>&1 || true
 RESP_41=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/files/upload" -H "Authorization: Bearer $DRIVER_TOKEN" -F "file=@$TEMP_IMG;type=image/jpeg")
 HTTP_41=$(echo "$RESP_41" | tail -n1)
 BODY_41=$(echo "$RESP_41" | head -n-1)
@@ -499,57 +572,6 @@ if [ "$HTTP_30" = "200" ] && echo "$BODY_30" | jq -e '.data.status == "FAILED"' 
   record_route 30 "POST" "/v1/me/stops/:id/fail" "$HTTP_30" "status FAILED" "PASS"
 else
   record_route 30 "POST" "/v1/me/stops/:id/fail" "$HTTP_30" "" "FAIL" "$BODY_30"
-fi
-
-# --- 8. Routes Subsystem (Routes 32-36) ---
-# Route 32: POST /v1/deliveries/:id/routes/recommend
-RESP_32=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/deliveries/$DELIVERY_ID/routes/recommend" -H "Authorization: Bearer $OWNER_TOKEN")
-HTTP_32=$(echo "$RESP_32" | tail -n1)
-BODY_32=$(echo "$RESP_32" | head -n-1)
-if [ "$HTTP_32" = "200" ] && echo "$BODY_32" | jq -e '.success == true' >/dev/null 2>&1; then
-  record_route 32 "POST" "/v1/deliveries/:id/routes/recommend" "$HTTP_32" "recommendation returned" "PASS"
-else
-  record_route 32 "POST" "/v1/deliveries/:id/routes/recommend" "$HTTP_32" "" "FAIL" "$BODY_32"
-fi
-
-# Route 33: POST /v1/deliveries/:id/routes/select
-RESP_33=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/deliveries/$DELIVERY_ID/routes/select" -H "Authorization: Bearer $OWNER_TOKEN" -H "Content-Type: application/json" -d "{\"source\":\"RECOMMENDED_2OPT\",\"recommendedSequence\":[\"$STOP_1\"],\"totalDistanceMeters\":1000,\"estimatedDurationSeconds\":120}")
-HTTP_33=$(echo "$RESP_33" | tail -n1)
-BODY_33=$(echo "$RESP_33" | head -n-1)
-if [ "$HTTP_33" = "200" ] || [ "$HTTP_33" = "201" ]; then
-  record_route 33 "POST" "/v1/deliveries/:id/routes/select" "$HTTP_33" "route selected" "PASS"
-else
-  record_route 33 "POST" "/v1/deliveries/:id/routes/select" "$HTTP_33" "" "FAIL" "$BODY_33"
-fi
-
-# Route 34: PATCH /v1/deliveries/:id/routes/reorder
-RESP_34=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE_URL/deliveries/$DELIVERY_ID/routes/reorder" -H "Authorization: Bearer $OWNER_TOKEN" -H "Content-Type: application/json" -d "{\"stopSequence\":[{\"deliveryStopId\":\"$STOP_1\",\"sequence\":1}]}")
-HTTP_34=$(echo "$RESP_34" | tail -n1)
-BODY_34=$(echo "$RESP_34" | head -n-1)
-if [ "$HTTP_34" = "200" ] && echo "$BODY_34" | jq -e '.success == true' >/dev/null 2>&1; then
-  record_route 34 "PATCH" "/v1/deliveries/:id/routes/reorder" "$HTTP_34" "route reordered" "PASS"
-else
-  record_route 34 "PATCH" "/v1/deliveries/:id/routes/reorder" "$HTTP_34" "" "FAIL" "$BODY_34"
-fi
-
-# Route 35: GET /v1/deliveries/:id/routes/current
-RESP_35=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $OWNER_TOKEN" "$BASE_URL/deliveries/$DELIVERY_ID/routes/current")
-HTTP_35=$(echo "$RESP_35" | tail -n1)
-BODY_35=$(echo "$RESP_35" | head -n-1)
-if [ "$HTTP_35" = "200" ] && echo "$BODY_35" | jq -e '.success == true' >/dev/null 2>&1; then
-  record_route 35 "GET" "/v1/deliveries/:id/routes/current" "$HTTP_35" "current route fetched" "PASS"
-else
-  record_route 35 "GET" "/v1/deliveries/:id/routes/current" "$HTTP_35" "" "FAIL" "$BODY_35"
-fi
-
-# Route 36: GET /v1/deliveries/:id/routes/versions
-RESP_36=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $OWNER_TOKEN" "$BASE_URL/deliveries/$DELIVERY_ID/routes/versions")
-HTTP_36=$(echo "$RESP_36" | tail -n1)
-BODY_36=$(echo "$RESP_36" | head -n-1)
-if [ "$HTTP_36" = "200" ] && echo "$BODY_36" | jq -e '.success == true' >/dev/null 2>&1; then
-  record_route 36 "GET" "/v1/deliveries/:id/routes/versions" "$HTTP_36" "versions list returned" "PASS"
-else
-  record_route 36 "GET" "/v1/deliveries/:id/routes/versions" "$HTTP_36" "" "FAIL" "$BODY_36"
 fi
 
 # --- 9. GPS Telemetry & Fleet (Routes 37-40) ---
@@ -755,6 +777,58 @@ if [ "$HTTP_59" = "404" ] || [ "$HTTP_59" = "200" ]; then
   record_route 59 "PATCH" "/v1/notifications/:id/read" "$HTTP_59" "handled read notification" "PASS"
 else
   record_route 59 "PATCH" "/v1/notifications/:id/read" "$HTTP_59" "" "FAIL" "$BODY_59"
+fi
+
+# --- 14. Emergencies & SOS Panic Subsystem (Routes 60-64) ---
+# Route 60: POST /v1/me/emergencies
+RESP_60=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/me/emergencies" -H "Authorization: Bearer $DRIVER_TOKEN" -H "Content-Type: application/json" -d "{\"latitude\":-6.2088,\"longitude\":106.8456,\"emergencyType\":\"ACCIDENT\",\"note\":\"Smoke test emergency alert\"}")
+HTTP_60=$(echo "$RESP_60" | tail -n1)
+BODY_60=$(echo "$RESP_60" | head -n-1)
+EMERGENCY_ID=$(echo "$BODY_60" | jq -r '.data.id // .data.emergency.id // empty')
+if ([ "$HTTP_60" = "201" ] || [ "$HTTP_60" = "200" ]) && [ -n "$EMERGENCY_ID" ]; then
+  record_route 60 "POST" "/v1/me/emergencies" "$HTTP_60" "emergency triggered" "PASS"
+else
+  record_route 60 "POST" "/v1/me/emergencies" "$HTTP_60" "" "FAIL" "$BODY_60"
+fi
+
+# Route 61: GET /v1/me/emergencies/active
+RESP_61=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $DRIVER_TOKEN" "$BASE_URL/me/emergencies/active")
+HTTP_61=$(echo "$RESP_61" | tail -n1)
+BODY_61=$(echo "$RESP_61" | head -n-1)
+if [ "$HTTP_61" = "200" ] && echo "$BODY_61" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 61 "GET" "/v1/me/emergencies/active" "$HTTP_61" "active emergency returned" "PASS"
+else
+  record_route 61 "GET" "/v1/me/emergencies/active" "$HTTP_61" "" "FAIL" "$BODY_61"
+fi
+
+# Route 62: GET /v1/emergencies
+RESP_62=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE_URL/emergencies")
+HTTP_62=$(echo "$RESP_62" | tail -n1)
+BODY_62=$(echo "$RESP_62" | head -n-1)
+if [ "$HTTP_62" = "200" ] && echo "$BODY_62" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 62 "GET" "/v1/emergencies" "$HTTP_62" "emergencies listed" "PASS"
+else
+  record_route 62 "GET" "/v1/emergencies" "$HTTP_62" "" "FAIL" "$BODY_62"
+fi
+
+# Route 63: GET /v1/emergencies/:id
+RESP_63=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE_URL/emergencies/$EMERGENCY_ID")
+HTTP_63=$(echo "$RESP_63" | tail -n1)
+BODY_63=$(echo "$RESP_63" | head -n-1)
+if [ "$HTTP_63" = "200" ] && echo "$BODY_63" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 63 "GET" "/v1/emergencies/:id" "$HTTP_63" "emergency detail returned" "PASS"
+else
+  record_route 63 "GET" "/v1/emergencies/:id" "$HTTP_63" "" "FAIL" "$BODY_63"
+fi
+
+# Route 64: PATCH /v1/emergencies/:id/status
+RESP_64=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE_URL/emergencies/$EMERGENCY_ID/status" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"status":"RESOLVED"}')
+HTTP_64=$(echo "$RESP_64" | tail -n1)
+BODY_64=$(echo "$RESP_64" | head -n-1)
+if [ "$HTTP_64" = "200" ] && echo "$BODY_64" | jq -e '.success == true' >/dev/null 2>&1; then
+  record_route 64 "PATCH" "/v1/emergencies/:id/status" "$HTTP_64" "emergency resolved" "PASS"
+else
+  record_route 64 "PATCH" "/v1/emergencies/:id/status" "$HTTP_64" "" "FAIL" "$BODY_64"
 fi
 
 echo "========================================================================="
