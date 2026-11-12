@@ -37,6 +37,35 @@ export class DeliveriesService {
     private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
+  async getDeliveries(actor: DeliveryActor) {
+    const where: any = {};
+    if (actor.role === 'DRIVER') {
+      if (!actor.driverId) return [];
+      where.driverId = actor.driverId;
+    } else if (actor.role === 'OWNER') {
+      if (actor.organizationId) {
+        where.OR = [
+          { createdBy: actor.userId },
+          { organizationId: actor.organizationId },
+        ];
+      } else {
+        where.createdBy = actor.userId;
+      }
+    }
+
+    return this.prisma.delivery.findMany({
+      where,
+      include: {
+        driver: true,
+        vehicle: true,
+        items: true,
+        stops: { orderBy: { sequence: 'asc' } },
+        routes: { orderBy: { version: 'desc' }, take: 1 },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async getDeliveryById(id: string, actor: DeliveryActor) {
     const delivery = await this.prisma.delivery.findUnique({
       where: { id },

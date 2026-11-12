@@ -42,6 +42,12 @@ export class DeliveriesController {
     return this.deliveriesService.createDelivery(dto, user.id);
   }
 
+  @Get()
+  @Roles('ADMIN', 'SUPER_ADMIN', 'OWNER', 'DRIVER')
+  async getDeliveries(@CurrentUser() user: any) {
+    return this.deliveriesService.getDeliveries(this.extractActor(user));
+  }
+
   @Get(':id')
   @Roles('ADMIN', 'SUPER_ADMIN', 'OWNER', 'DRIVER')
   async getDelivery(

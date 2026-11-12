@@ -6,6 +6,9 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Inject,
+  forwardRef,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { RedisService } from '../../common/redis/redis.service';
@@ -13,6 +16,8 @@ import { ConversationsService, UserActor } from './conversations.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
 import { Prisma } from '@prisma/client';
+import { RealtimeGateway } from '../realtime/gateways/realtime.gateway';
+import { formatRealtimeEvent } from '../realtime/dto/realtime-envelope.dto';
 
 export interface IngestedMessageResult {
   id: string;
@@ -37,6 +42,9 @@ export class MessagesService {
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
     private readonly conversationsService: ConversationsService,
+    @Optional()
+    @Inject(forwardRef(() => RealtimeGateway))
+    private readonly realtimeGateway?: RealtimeGateway,
   ) {}
 
   async sendMessage(
@@ -71,9 +79,27 @@ export class MessagesService {
     }
 
     // 3. Verify Recipient Device
-    const recipientDevice = await this.prisma.device.findUnique({
-      where: { id: dto.recipientDeviceId },
-    });
+    let recipientDeviceId = dto.recipientDeviceId;
+    let recipientDevice = recipientDeviceId
+      ? await this.prisma.device.findUnique({ where: { id: recipientDeviceId } })
+      : null;
+
+    if (!recipientDevice || recipientDevice.status === 'REVOKED') {
+      const counterpartyUserId = actor.role === 'DRIVER'
+        ? conversation.ownerId
+        : (await this.prisma.driver.findUnique({ where: { id: conversation.driverId } }))?.userId;
+
+      if (counterpartyUserId) {
+        const fallbackDev = await this.prisma.device.findFirst({
+          where: { userId: counterpartyUserId, status: { not: 'REVOKED' } },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (fallbackDev) {
+          recipientDevice = fallbackDev;
+          recipientDeviceId = fallbackDev.id;
+        }
+      }
+    }
 
     if (!recipientDevice || recipientDevice.status === 'REVOKED') {
       throw new UnprocessableEntityException({
@@ -134,7 +160,7 @@ export class MessagesService {
         conversationId,
         senderUserId: actor.userId,
         senderDeviceId: actor.deviceId,
-        recipientDeviceId: dto.recipientDeviceId,
+        recipientDeviceId: recipientDeviceId,
         protocolVersion: dto.protocolVersion || 1,
         ciphertextBlob: dto.ciphertextBlob,
         headerJson: dto.headerJson as unknown as Prisma.InputJsonValue,
@@ -172,6 +198,30 @@ export class MessagesService {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
           this.logger.debug(`Idempotency collision caught for message key ${dto.idempotencyKey}`);
         }
+      }
+    }
+
+    // Relay to WebSocket room if sent via REST API
+    if (endpoint !== '/v1/realtime' && this.realtimeGateway?.server) {
+      try {
+        const relayedEnvelope = formatRealtimeEvent(
+          'chat.message.relayed',
+          {
+            messageId: message.id,
+            conversationId: message.conversationId,
+            senderUserId: message.senderUserId,
+            senderDeviceId: message.senderDeviceId,
+            recipientDeviceId: message.recipientDeviceId,
+            protocolVersion: message.protocolVersion,
+            ciphertextBlob: message.ciphertextBlob,
+            headerJson: message.headerJson,
+            createdAt: message.createdAt,
+          },
+          { userId: actor.userId, role: actor.role, deviceId: actor.deviceId, driverId: actor.driverId },
+        );
+        this.realtimeGateway.server.to(`conversation:${conversationId}`).emit('chat.message.relayed', relayedEnvelope);
+      } catch (wsErr) {
+        this.logger.debug(`Failed to broadcast relayed chat message: ${wsErr}`);
       }
     }
 
