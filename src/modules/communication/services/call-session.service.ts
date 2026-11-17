@@ -46,16 +46,73 @@ export class CallSessionService {
       });
     }
 
-    // Rate Limit: Max 3 call invites per 60 seconds per user
+    // How long an invite keeps ringing before it is auto-expired
+    const pendingTimeoutMs = 45000;
+
+    // Reuse an invite that is still ringing instead of creating a new session.
+    // Retrying a call that the driver has not answered yet must not burn the
+    // rate-limit budget, and the driver should simply be re-rung.
+    if (dto.deliveryId) {
+      const pending = await this.prisma.realtimeSession.findFirst({
+        where: {
+          ownerId: actor.userId,
+          driverId: dto.driverId,
+          deliveryId: dto.deliveryId,
+          status: 'PENDING',
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (pending) {
+        const extendedExpiry = new Date(Date.now() + pendingTimeoutMs);
+        const refreshed = await this.prisma.realtimeSession.update({
+          where: { id: pending.id },
+          data: { expiresAt: extendedExpiry },
+        });
+
+        const turnCredentials = this.turnCredentialService.generateEphemeralCredentials(
+          actor.userId,
+          3600,
+        );
+
+        this.broadcastCallInvite(
+          refreshed.id,
+          dto.driverId,
+          refreshed.type as 'VOICE_PTT' | 'VIDEO',
+          actor,
+          turnCredentials,
+        );
+
+        setTimeout(async () => {
+          await this.handlePendingTimeout(refreshed.id);
+        }, pendingTimeoutMs);
+
+        return {
+          sessionId: refreshed.id,
+          type: refreshed.type,
+          ownerId: refreshed.ownerId,
+          driverId: refreshed.driverId,
+          deliveryId: refreshed.deliveryId,
+          status: refreshed.status,
+          createdAt: refreshed.createdAt,
+          expiresAt: refreshed.expiresAt,
+          turnCredentials,
+        };
+      }
+    }
+
+    // Rate Limit: configurable call invites per 60 seconds per user
+    const inviteLimit = Number(process.env.CALL_INVITE_RATE_LIMIT ?? 12);
     const rateCount = await this.redisService.incrRateLimit(
       `throttle:call:invite:${actor.userId}`,
       60,
     );
-    if (rateCount > 3) {
+    if (rateCount > inviteLimit) {
       throw new HttpException(
         {
           code: 'RATE_LIMIT_EXCEEDED',
-          message: 'Call invitation rate limit exceeded (Max 3 invites/min).',
+          message: `Call invitation rate limit exceeded (Max ${inviteLimit} invites/min).`,
         },
         HttpStatus.TOO_MANY_REQUESTS,
       );
@@ -95,7 +152,6 @@ export class CallSessionService {
     // Generate Ephemeral TURN Credentials (RFC 7635)
     const turnCredentials = this.turnCredentialService.generateEphemeralCredentials(actor.userId, 3600);
 
-    const pendingTimeoutMs = 30000; // 30 seconds call invite timeout
     const expiresAt = new Date(Date.now() + pendingTimeoutMs);
 
     const session = await this.prisma.realtimeSession.create({
