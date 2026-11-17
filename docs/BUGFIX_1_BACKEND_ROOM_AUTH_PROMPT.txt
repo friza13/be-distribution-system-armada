@@ -1,0 +1,66 @@
+TASK: Fix WebSocket room authorization so drivers can subscribe to their own `driver:<driverId>` room.
+
+PROJECT: /home/priz/Documents/be-distribution-system-armada (NestJS + Prisma)
+
+CONTEXT / ROOT CAUSE (already diagnosed, do not re-investigate):
+- `src/modules/communication/services/call-session.service.ts` line ~335 emits:
+  `this.realtimeGateway.server.to(`driver:${driverId}`).emit('webrtc.call.invite', envelope);`
+- The Flutter driver app subscribes with: `socketService.joinRoom('driver:$driverId')`.
+- `src/modules/realtime/services/ws-room-authorizer.service.ts` only handles the room
+  categories `delivery`, `conversation`, `session`, `fleet`. Any `driver:<id>` room falls
+  into `default:` and is rejected with `UNKNOWN_ROOM_PATTERN`.
+- Consequence: the driver never joins the room, so the emitted invite has no recipient and
+  the call never rings on the driver device.
+
+REQUIRED CHANGE (single file: src/modules/realtime/services/ws-room-authorizer.service.ts):
+
+1. Add a new case in `authorizeRoomJoin`'s switch:
+   ```ts
+   case 'driver':
+     return this.authorizeDriverRoom(socketData, resourceId, trimmedRoom);
+   ```
+   Place it next to the existing cases, before `default`.
+
+2. Implement the private method following the exact style of the existing
+   `authorizeFleetMonitoringRoom` / `authorizeRealtimeSessionRoom` methods:
+
+   ```ts
+   private async authorizeDriverRoom(
+     socketData: AuthenticatedSocketData,
+     driverId: string,
+     normalizedRoom: string,
+   ): Promise<RoomAuthorizationResult> {
+     if (!driverId) {
+       return { authorized: false, reason: 'MISSING_DRIVER_ID' };
+     }
+
+     const { role, driverId: socketDriverId, userId } = socketData;
+
+     if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+       return { authorized: true, normalizedRoom };
+     }
+
+     if (role === 'DRIVER' && socketDriverId && socketDriverId === driverId) {
+       return { authorized: true, normalizedRoom };
+     }
+
+     this.logger.warn(
+       `Anti-IDOR rejection: User ${userId} (role ${role}, driver ${socketDriverId ?? 'none'}) attempted to subscribe to driver room ${driverId}`,
+     );
+     return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
+   }
+   ```
+
+   Notes:
+   - Do NOT allow OWNER to join a driver room.
+   - Keep the method `async` so the call site stays uniform with the other cases, even though
+     no DB lookup is needed.
+
+3. Do not change any other file. Do not touch the `default:` branch.
+
+VERIFY BEFORE FINISHING:
+- Run: `npm run build`
+- It must exit 0 with no TypeScript errors.
+- Then run: `npx tsc --noEmit` and confirm no new errors.
+
+Report: files changed, the build result, and the exact diff of the switch statement.

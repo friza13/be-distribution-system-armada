@@ -47,6 +47,9 @@ export class WsRoomAuthorizerService {
         }
         return { authorized: false, reason: 'UNKNOWN_ROOM_PATTERN' };
 
+      case 'driver':
+        return this.authorizeDriverRoom(socketData, resourceId, trimmedRoom);
+
       default:
         return { authorized: false, reason: 'UNKNOWN_ROOM_PATTERN' };
     }
@@ -196,6 +199,31 @@ export class WsRoomAuthorizerService {
     // DRIVER is strictly rejected from fleet monitoring
     this.logger.warn(
       `Anti-IDOR rejection: Driver ${socketData.userId} attempted to subscribe to fleet:monitoring`,
+    );
+    return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
+  }
+
+  private async authorizeDriverRoom(
+    socketData: AuthenticatedSocketData,
+    driverId: string,
+    normalizedRoom: string,
+  ): Promise<RoomAuthorizationResult> {
+    if (!driverId) {
+      return { authorized: false, reason: 'MISSING_DRIVER_ID' };
+    }
+
+    const { role, driverId: socketDriverId, userId } = socketData;
+
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+      return { authorized: true, normalizedRoom };
+    }
+
+    if (role === 'DRIVER' && socketDriverId && socketDriverId === driverId) {
+      return { authorized: true, normalizedRoom };
+    }
+
+    this.logger.warn(
+      `Anti-IDOR rejection: User ${userId} (role ${role}, driver ${socketDriverId ?? 'none'}) attempted to subscribe to driver room ${driverId}`,
     );
     return { authorized: false, reason: 'ROOM_ACCESS_DENIED' };
   }
