@@ -58,6 +58,7 @@ export class CallSessionService {
           ownerId: actor.userId,
           driverId: dto.driverId,
           deliveryId: dto.deliveryId,
+          type: dto.type,
           status: 'PENDING',
           expiresAt: { gt: new Date() },
         },
@@ -146,6 +147,21 @@ export class CallSessionService {
       throw new NotFoundException({
         code: 'DRIVER_NOT_FOUND',
         message: `Driver with ID ${dto.driverId} not found`,
+      });
+    }
+
+    // A different call type must not be answered by an invite that is still
+    // ringing from the previous attempt (PTT dialog opening a video session).
+    if (dto.deliveryId) {
+      await this.prisma.realtimeSession.updateMany({
+        where: {
+          ownerId: actor.userId,
+          driverId: dto.driverId,
+          deliveryId: dto.deliveryId,
+          status: 'PENDING',
+          type: { not: dto.type },
+        },
+        data: { status: 'TIMEOUT' },
       });
     }
 
